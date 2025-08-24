@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import List, Tuple
 
 def ensure_meta(conn: sqlite3.Connection):
+    # Enforce FKs for everything the runner does
     conn.execute("PRAGMA foreign_keys=ON;")
+    # Defer FK checks until COMMIT (SQLite 3.39+)
+    try:
+        conn.execute("PRAGMA defer_foreign_keys=ON;")
+    except sqlite3.OperationalError:
+        pass  # older SQLite, safe to ignore
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -57,15 +63,23 @@ def apply_py(conn: sqlite3.Connection, path: Path):
     mod.migrate(conn)
 
 def apply_one(conn: sqlite3.Connection, num: int, name: str, path: Path):
-    with conn:  # transactional
+    # Single atomic transaction per migration
+    conn.execute("PRAGMA foreign_keys=ON;")
+    try:
+        conn.execute("BEGIN IMMEDIATE;")  # lock early; DDL is transactional in SQLite
         if path.suffix == ".sql":
-            apply_sql(conn, path)
+            apply_sql(conn, path)  # do NOT BEGIN/COMMIT inside files
         else:
-            apply_py(conn, path)
+            apply_py(conn, path)   # migration code must NOT commit/rollback
         conn.execute(
             "INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)",
             (num, name, int(time.time())),
         )
+        conn.commit()
+    except Exception:
+        conn.rollback()  # all or nothing
+        raise
+
 
 def cmd_status(conn: sqlite3.Connection, dir_path: Path):
     ensure_meta(conn)

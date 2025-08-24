@@ -57,7 +57,7 @@ class Tracker:
         with _connect(self.db) as c:
             try:
                 c.execute(
-                    "INSERT OR REPLACE INTO runs(run_id, name started_at, status, meta_json, input_sig_json, input_sig_hash) VALUES(?,?,?,?,?,?)",
+                    "INSERT OR REPLACE INTO runs(run_id, name, started_at, status, meta_json, input_sig_json, input_sig_hash) VALUES(?,?,?,?,?,?,?)",
                     (run_id, run_name, _now(), "running", json.dumps(meta or {}), canonical_input_sig_json, input_sig_hash),
                 )
                 c.commit()
@@ -65,12 +65,12 @@ class Tracker:
                 self.log.exception("could not add audit to start run")
                 raise AuditDatabaseException
 
-    def finish_run(self, run_id: str, status: str) -> None:
+    def finish_run(self, run_id: str, status: str, *, output_path) -> None:
         with _connect(self.db) as c:
             try:
                 c.execute(
-                    "UPDATE runs SET finished_at=?, status=? WHERE run_id=?",
-                    (_now(), status, run_id),
+                    "UPDATE runs SET finished_at=?, status=? output_path=? WHERE run_id=?",
+                    (_now(), status, output_path, run_id),
                 )
                 c.commit()
             except:

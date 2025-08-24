@@ -2,7 +2,26 @@
 
 import hashlib, tempfile
 from pathlib import Path
-import os
+import os, json
+
+class InvalidJSONException(Exception):
+    '''Exception: attempted to canonicalize invalid json'''
+
+# Helpers
+def canonicalize_json(text):
+    if text is None:
+        return None
+    try:
+        obj = json.loads(text)
+    except Exception:
+        raise InvalidJSONException
+        # Not valid JSON (or you stored raw text); hash the raw bytes
+    # Canonical dump for stable hashing (order/whitespace independent)
+    return json.dumps(obj, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+
+def sha256_hex(s):
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
 
 def compute_sha256(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
     """Return hex SHA-256 of file at `path`, streaming in chunks."""

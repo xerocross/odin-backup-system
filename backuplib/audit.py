@@ -5,33 +5,17 @@ from dataclasses import dataclass
 from pathlib import Path
 import sqlite3, time, json, contextlib
 from typing import Any, Optional
+from backuplib.checksumtools import canonicalize_json, sha256_hex
+from backuplib.logging import setup_logging, WithContext
+
+log = setup_logging(level="INFO", appName="odin_backup_auditing")
 
 DEFAULT_DB = Path.home() / ".odin_backup" / "audit.db"
 
-DDL = """
-PRAGMA journal_mode=WAL;
-CREATE TABLE IF NOT EXISTS runs (
-  run_id      TEXT PRIMARY KEY,
-  started_at  INTEGER NOT NULL,
-  finished_at INTEGER,
-  status      TEXT CHECK(status IN ('running','success','failed')) NOT NULL,
-  meta_json   TEXT
-);
-CREATE TABLE IF NOT EXISTS steps (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  run_id          TEXT NOT NULL,
-  name            TEXT NOT NULL,
-  started_at      INTEGER NOT NULL,
-  finished_at     INTEGER,
-  status          TEXT CHECK(status IN ('running','success','failed','skipped')) NOT NULL,
-  message         TEXT,
-  input_sig_json  TEXT,    -- e.g. {"tar_sha256": "...", "recipient": "..."}
-  output_path     TEXT,
-  output_sig_json TEXT,    -- e.g. {"sha256": "..."}
-  FOREIGN KEY(run_id) REFERENCES runs(run_id)
-);
-CREATE INDEX IF NOT EXISTS idx_steps_run ON steps(run_id);
-"""
+class AuditDatabaseException(Exception):
+    '''There was a problem with the Odin Backup Audit Database'''
+    pass
+
 
 def _now() -> int: return int(time.time())
 
@@ -42,8 +26,7 @@ def _connect(db_path: Path):
     return conn
 
 def init(db_path: Path = DEFAULT_DB) -> None:
-    with _connect(db_path) as c:
-        c.executescript(DDL)
+    pass
 
 @dataclass
 class StepRef:
@@ -52,59 +35,83 @@ class StepRef:
     name: str
 
 class Tracker:
+
     def __init__(self, db_path: Path = DEFAULT_DB):
         self.db = db_path
+        self.log = log
+        #log = WithContext(log, {"run_log_id": log_run_id})
         init(self.db)
 
     # ---- runs ----
-    def start_run(self, run_id: str, meta: Optional[dict[str, Any]] = None) -> None:
+    def start_run(
+                    self,
+                    run_name: str,
+                    run_id: str,
+                    input_sig_json: str,
+                    meta: Optional[dict[str, Any]] = None
+                  
+                  ) -> None:
+        
+        canonical_input_sig_json = canonicalize_json(input_sig_json)
+        input_sig_hash = sha256_hex(canonical_input_sig_json)
         with _connect(self.db) as c:
-            c.execute(
-                "INSERT OR REPLACE INTO runs(run_id, started_at, status, meta_json) VALUES(?,?,?,?)",
-                (run_id, _now(), "running", json.dumps(meta or {})),
-            )
-            c.commit()
+            try:
+                c.execute(
+                    "INSERT OR REPLACE INTO runs(run_id, name started_at, status, meta_json, input_sig_json, input_sig_hash) VALUES(?,?,?,?,?,?)",
+                    (run_id, run_name, _now(), "running", json.dumps(meta or {}), canonical_input_sig_json, input_sig_hash),
+                )
+                c.commit()
+            except:
+                self.log.exception("could not add audit to start run")
+                raise AuditDatabaseException
 
     def finish_run(self, run_id: str, status: str) -> None:
         with _connect(self.db) as c:
-            c.execute(
-                "UPDATE runs SET finished_at=?, status=? WHERE run_id=?",
-                (_now(), status, run_id),
-            )
-            c.commit()
+            try:
+                c.execute(
+                    "UPDATE runs SET finished_at=?, status=? WHERE run_id=?",
+                    (_now(), status, run_id),
+                )
+                c.commit()
+            except:
+                self.log.exception("could not add audit to finish run")
+                raise AuditDatabaseException
 
     # ---- steps ----
     def start_step(
         self,
         run_id: str,
         name: str,
-        *,
-        input_sig: Optional[dict[str, Any]] = None,
-        output_path: Optional[Path] = None,
     ) -> StepRef:
         with _connect(self.db) as c:
-            cur = c.execute(
-                "INSERT INTO steps(run_id,name,started_at,status,input_sig_json,output_path) VALUES(?,?,?,?,?,?)",
-                (run_id, name, _now(), "running", json.dumps(input_sig or {}), str(output_path) if output_path else None),
-            )
-            step_id = cur.lastrowid
-            c.commit()
+            try:    
+                cur = c.execute(
+                    "INSERT INTO steps(run_id,name,started_at, status) VALUES(?,?,?,?)",
+                    (run_id, name, _now(), "running"),
+                )
+                step_id = cur.lastrowid
+                c.commit()
+            except:
+                self.log.exception("could not initiate step in audit database")
+                raise AuditDatabaseException
         return StepRef(step_id, run_id, name)
 
     def finish_step(
         self,
         step: StepRef,
         status: str,
-        *,
-        message: Optional[str] = None,
-        output_sig: Optional[dict[str, Any]] = None,
+        message: str
     ) -> None:
         with _connect(self.db) as c:
-            c.execute(
-                "UPDATE steps SET finished_at=?, status=?, message=?, output_sig_json=? WHERE id=?",
-                (_now(), status, message, json.dumps(output_sig or {}), step.id),
-            )
-            c.commit()
+            try:
+                c.execute(
+                    "UPDATE steps SET finished_at=?, status=?, message=? WHERE id=?",
+                    (_now(), status, message, step.id),
+                )
+                c.commit()
+            except:
+                self.log.exception("an exception occurred while finishing a step")
+                raise AuditDatabaseException
 
     # ---- convenience: context manager for steps ----
     @contextlib.contextmanager
@@ -112,16 +119,14 @@ class Tracker:
         self,
         run_id: str,
         name: str,
-        *,
-        input_sig: Optional[dict[str, Any]] = None,
-        output_path: Optional[Path] = None,
     ):
-        step = self.start_step(run_id, name, input_sig=input_sig, output_path=output_path)
+        step = self.start_step(run_id, name)
         try:
             yielded = {}
-            yield yielded  # caller can stick {"output_sig": {...}} or {"status": "skipped"} in here
+            yield yielded 
             status = yielded.get("status", "success")
-            self.finish_step(step, status, output_sig=yielded.get("output_sig"))
+            message = yielded.get("message", "")
+            self.finish_step(step, status, message=message)
         except Exception as e:
             self.finish_step(step, "failed", message=str(e))
             raise

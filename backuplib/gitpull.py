@@ -30,7 +30,10 @@ from pathlib import Path
 from typing import Optional, Tuple
 from backuplib.audit import Tracker, StepRef
 from dataclasses import dataclass
+from backuplib.logging import setup_logging, WithContext
+import uuid
 
+global_log = setup_logging(level="INFO", appName="git_pull_module")
 
 @dataclass
 class QuickGitRepoSig:
@@ -49,6 +52,13 @@ class PathNotAGitRepo(GitException):
     """Error: The given path was not a git repository."""
     pass
 
+class FetchFailed(GitException):
+    """Error: The given path was not a git repository."""
+    pass
+
+class GitPullFailure(GitException):
+    """Error: An error occurred during git pull"""
+    pass
 
 def generate_qsig(repo_path) -> QuickGitRepoSig:
     head_hash = get_git_headhash(repo_path)
@@ -122,91 +132,141 @@ def git_pull(
     rebase: bool = False,
     ff_only: bool = False,
     timeout: Optional[int] = 300,
-    want_machine: bool = False,
-    want_json: bool = False,
+    *,
+    tracker: Tracker,
+    run_id: str
 ) -> Tuple[int, str, str, dict]:
     """
     Perform `git pull` in the given repo.
     Returns (returncode, stdout, stderr, summary_dict).
     """
+
+    # run_id = uuid.uuid4()
+    log_run_id = str(run_id)[:12]
+    log = WithContext(global_log, {"run_log_id": log_run_id})
+
+    log.debug("starting git pull operation")
     summary = {"result": None, "before": None, "after": None, "target": None, "remote": remote, "branch": branch}
-    check_git_available()
-    ensure_repo(repo_path)
+    
+    with tracker.record_step(run_id =run_id, 
+                             name = "ensure git repo"
+                             ) as rec:
+        check_git_available()
+        ensure_repo(repo_path)
+        rec["status"] = "success"
+
 
     # Identify target ref for comparison
     target_ref, errcode = detect_target_ref(repo_path, remote, branch)
     if not target_ref:
+        message = "No upstream set for current branch and no --branch provided.\n"
+        log.error(message)
         summary["result"] = "no_upstream"
-        return 1, "", "No upstream set for current branch and no --branch provided.\n", summary
+        return 1, "", message, summary
     summary["target"] = target_ref
 
-    # Record current HEAD before
-    rc, before_sha, err = git_rev_parse(repo_path, "HEAD")
-    if rc != 0:
-        return rc, "", f"Failed to resolve HEAD: {err}", summary
-    before_sha = before_sha.strip()
-    summary["before"] = before_sha
+    with tracker.record_step(run_id, "record head") as rec:
+        # Record current HEAD before
+        rc, before_sha, err = git_rev_parse(repo_path, "HEAD")
+        if rc != 0:
+            rec["status"] = "failed"
+            raise GitException
+        before_sha = before_sha.strip()
+        summary["before"] = before_sha
+        rec["status"] = "success"
 
-    # Fetch first
-    fetch_cmd = ["git", "-C", str(repo_path), "fetch", remote]
-    frc, fout, ferr = run(fetch_cmd, timeout=timeout)
-    if frc != 0:
-        summary["result"] = "error"
-        return frc, fout, f"Fetch failed:\n{ferr}", summary
+    with tracker.record_step(run_id, "perform fetch") as rec:
+        # Fetch first
+        fetch_cmd = ["git", "-C", str(repo_path), "fetch", remote]
+        frc, fout, ferr = run(fetch_cmd, timeout=timeout)
+        if frc != 0:
+            rec["status"] = "failed"
+            raise FetchFailed
 
-    # Get remote/target sha after fetch
-    rc, target_sha, err = git_rev_parse(repo_path, target_ref)
-    if rc != 0:
-        summary["result"] = "error"
-        return rc, "", f"Failed to resolve target ref '{target_ref}': {err}", summary
-    target_sha = target_sha.strip()
+    with tracker.record_step(run_id, "perform fetch") as rec:
+        # Get remote/target sha after fetch
+        rc, target_sha, err = git_rev_parse(repo_path, target_ref)
+        if rc != 0:
+            rec["status"] = "failed"
+            rec["message"] = f"Failed to resolve target ref '{target_ref}': {err}"
+            summary["result"] = "error"
+            raise GitException
+        rec["status"] = "success"
+        target_sha = target_sha.strip()
 
-    # Quick classification before pulling
-    if before_sha == target_sha:
-        summary["result"] = "up_to_date"
-        # Nothing to do; mirror git's behavior and return success without running pull
-        return 0, "Already up to date.\n", "", summary
+    with tracker.record_step(run_id, "classify update") as rec:
+        # Quick classification before pulling
+        if before_sha == target_sha:
+            rec["status"] = "success"
+            summary["result"] = "up_to_date"
+            rec["message"] = "up_to_date"
+            # Nothing to do; mirror git's behavior and return success without running pull
+            log.info("already up to date")
+            return 0, "Already up to date.\n", "", summary
 
-    # If fast-forward possible, we can classify ahead of time
-    ff_possible = is_ancestor(repo_path, before_sha, target_sha)
+        # If fast-forward possible, we can classify ahead of time
+        ff_possible = is_ancestor(repo_path, before_sha, target_sha)
+        rec["message"] = "ff possible"
+        rec["status"] = "success"
 
-    # Build pull cmd
-    pull_cmd = ["git", "-C", str(repo_path), "pull", remote]
-    if branch:
-        pull_cmd.append(branch)
-    if rebase:
-        pull_cmd.append("--rebase")
-    if ff_only:
-        pull_cmd.append("--ff-only")
+    with tracker.record_step(run_id, "perform git pull operation") as rec:
+        # Build pull cmd
+        pull_cmd = ["git", "-C", str(repo_path), "pull", remote]
+        if branch:
+            rec["message"] = "branch"
+            pull_cmd.append(branch)
+        if rebase:
+            rec["message"] = rec["message"] + ": rebase"
+            pull_cmd.append("--rebase")
+        if ff_only:
+            rec["message"] = rec["message"] + ": ff only"
+            pull_cmd.append("--ff-only")
 
-    prc, pout, perr = run(pull_cmd, timeout=timeout)
-    if prc != 0:
-        summary["result"] = "error"
-        return prc, pout, perr, summary
-
-    # After state
-    rc, after_sha, err = git_rev_parse(repo_path, "HEAD")
-    if rc != 0:
-        summary["result"] = "error"
-        return rc, "", f"Failed to resolve new HEAD: {err}", summary
-    after_sha = after_sha.strip()
-    summary["after"] = after_sha
-
-    # Classify outcome
-    if after_sha == before_sha:
-        # Extremely rare (e.g., hooks), treat as up-to-date
-        summary["result"] = "up_to_date"
-    elif ff_possible and after_sha == target_sha:
-        summary["result"] = "fast_forward"
-    else:
-        # Distinguish merge vs rebase if possible
-        if has_second_parent(repo_path, "HEAD"):
-            summary["result"] = "merge"
-        elif rebase:
-            summary["result"] = "rebase"
+        prc, pout, perr = run(pull_cmd, timeout=timeout)
+        if prc != 0:
+            rec["status"] = "failed"
+            summary["result"] = "error"
+            return prc, pout, perr, summary
         else:
-            # Could be rebase via config, or other update
-            summary["result"] = "updated"
+            rec["status"] = "success"
+
+    with tracker.record_step(run_id, "capture after state") as rec:
+        # After state
+        rc, after_sha, err = git_rev_parse(repo_path, "HEAD")
+        if rc != 0:
+            message = f"Failed to resolve new HEAD: {err}"
+            log.error(message)
+            rec["status"] = "failed"
+            summary["result"] = "error"
+            rec["message"] = message
+            return rc, "", message, summary
+        after_sha = after_sha.strip()
+        summary["after"] = after_sha
+
+        # Classify outcome
+        if after_sha == before_sha:
+            # Extremely rare (e.g., hooks), treat as up-to-date
+            msg = "up_to_date"
+            log.info(msg)
+            summary["result"] = msg
+            rec["message"] = msg
+        elif ff_possible and after_sha == target_sha:
+            msg = "fast_forward"
+            log.info(msg)
+            summary["result"] = msg
+            rec["message"] = msg
+        else:
+            # Distinguish merge vs rebase if possible
+            if has_second_parent(repo_path, "HEAD"):
+                summary["result"] = "merge"
+                rec["message"] = "merge"
+            elif rebase:
+                summary["result"] = "rebase"
+                rec["message"] = "rebase"
+            else:
+                # Could be rebase via config, or other update
+                rec["message"] = "updated"
+                summary["result"] = "updated"
 
     return 0, pout, perr, summary
 

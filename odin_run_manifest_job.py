@@ -4,148 +4,233 @@ from pathlib import Path
 import os, tempfile
 from backuplib.generate_manifest import write_manifest
 from backuplib.audit import Tracker
-from backuplib.filesutil import quick_scan_signature, digest, atomic_write_text, QuickManifestSig
-from backuplib.checksumtools import compute_sha256
+from backuplib.filesutil import quick_scan_signature, atomic_write_text, QuickManifestSig
+from backuplib.checksumtools import compute_sha256, digest
+from backuplib.exceptions import ConfigException
 import json
 from zoneinfo import ZoneInfo
 from datetime import datetime
 from dataclasses import dataclass
-from typing import Dict, List, str
+from typing import Dict, List
 from backuplib.logging import setup_logging, WithContext
+from backuplib.configloader import OdinConfig, load_config
 from dataclasses import asdict
 import uuid
 import yaml
 
 global_log = setup_logging(level="INFO", appName="odin_generate_manifest") 
 
-class ConfigError(Exception):
-    '''Encountered an error in the configuration'''
-    pass
 
 # Load a YAML file into a Python dict
-CONFIG_PATH = "~/.config/odin/touch odin_run_manifest_job.yaml"
+CONFIG_PATH = Path("~/.config/odin/odin_run_manifest_job.yaml").expanduser()
 with open(CONFIG_PATH, "r") as f:
     config = yaml.safe_load(f)
 
 try:
-    print(config["database"]["host"])
-    print(config["database"]["port"])
-    REPO_DIR = config["REPO_DIR"]
-    ODIN_MANIFEST_DIR = config["ODIN_MANIFEST_DIR"]
+    REPO_DIR = Path(config["REPO_DIR"])
+    ODIN_MANIFEST_DIR = Path(config["ODIN_MANIFEST_DIR"])
     EXCLUSIONS = config["EXCLUSIONS"]
+    OUTPUT_PATH = config["OUTPUT_PATH"]
+    LOCAL_ZONE = config["LOCAL_ZONE"]
+    MANIFEST_STATE_NAME = config["MANIFEST_STATE_NAME"]
 except KeyError as e:
-    raise ConfigError(f"Missing required config key. Config path: {CONFIG_PATH}.")
+    raise ConfigException(f"Missing required config key. Config path: {CONFIG_PATH}.")
 
-local_zone = ZoneInfo("America/New_York")
+state_path = ODIN_MANIFEST_DIR / MANIFEST_STATE_NAME
 
-LOGFILE = "/home/adam/odin-plaintext-backups.log"
+config_dict = {
+    "REPO_DIR": REPO_DIR,
+    "ODIN_MANIFEST_DIR": ODIN_MANIFEST_DIR,
+    "MANIFEST_EXCLUSIONS": EXCLUSIONS,
+    "MANIFEST_OUTPUT_PATH": OUTPUT_PATH,
+    "LOCAL_ZONE": LOCAL_ZONE,
+    "MANIFEST_STATE_NAME" : MANIFEST_STATE_NAME,
+    "STATE_PATH": state_path
+}
+config_fingerprint = digest(config_dict)
+script_path = Path(__file__)
+local_zone = ZoneInfo(LOCAL_ZONE)
+
+odinConfig: OdinConfig = load_config()
 
 @dataclass
 class ManifestInfo:
     root_path: str
     init_qsig : QuickManifestSig
-    age: int
-    city: str
+    init_sig_hex: str
+    output_sig_hex: str
+    timestamp: str
 
 def localtimestamp() -> str:
     return datetime.now(local_zone).strftime("%Y-%m-%d_%H%M%S")
 
+def get_manifest_state():
+
+
+    with open(config_dict["STATE_PATH"], 'r', encoding="utf-8") as f:
+        data = json.load(f)
+        return data
+
+
+
+def run():
+    odin_run_manifest_job()
+
 def odin_run_manifest_job():
-    run_id = "manifest-" + str(uuid.uuid4())
-    log_run_id = str(run_id)[:12]
-    log = WithContext(global_log, {"run_log_id": log_run_id})
-    log.info(f"starting the odin manifest job run_id: {run_id}")
-
-    root = Path(REPO_DIR)
-    out_dir = Path(ODIN_MANIFEST_DIR)
-    tracker = Tracker()
-    timestamp = localtimestamp()
-    run_id = run_id
-
     
-    out_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = out_dir / f"odin.manifest.yaml"
-    state_path = manifest_path.with_suffix(manifest_path.suffix + ".state.json")
-    
-    qsig : QuickManifestSig = quick_scan_signature(root=root, exclude=EXCLUSIONS)
-    qsig_json = json.dumps(asdict(qsig))
-    qsig_hex = digest(qsig)
-    
+    try:
+        run_id = "manifest-" + str(uuid.uuid4())
+        log_run_id = str(run_id)[:12]
+        log = WithContext(global_log, {"run_log_id": log_run_id})
+        log.info(f"starting the odin manifest job run_id: {run_id}")
 
-    tracker.start_run(run_id,
-                      run_name="generate_manifest",
-                      input_sig_json = qsig_json,
-                      meta={"job": "generate manifest", 
-                                    "root": str(root),
-                                    "timestamp" :  timestamp,
+        root = Path(REPO_DIR)
+        out_dir = Path(ODIN_MANIFEST_DIR)
+        tracker = Tracker()
+        log.info("made tracker")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = out_dir / f"odin.manifest.yaml"
+        state_path = manifest_path.with_suffix(manifest_path.suffix + ".state.json")
+        log.info(f"found state path: {state_path}")
+        qsig : QuickManifestSig = quick_scan_signature(root=root, exclude=EXCLUSIONS)
+        qsig_json = json.dumps(asdict(qsig))
+        qsig_hex = digest(asdict(qsig))
+        log.info(f"computed qsig hex: {qsig_hex}")
+        tracker.start_run(run_id = run_id,
+                            run_name="generate_manifest",
+                            input_sig_json = qsig_json,
+                            meta={
+                                        "job": "generate manifest", 
+                                        "root": str(root)
                             })
+    except Exception as e:
+        log.exception("something bad happened")
+    
+
+    
 
     with tracker.record_step(
                             run_id=run_id, 
-                            name="check signature", 
-                            input_sig=qsig, output_path=manifest_path
-                    ) as rec:
+                            name="check signature"
+                            ) as rec:
         if manifest_path.exists() and state_path.exists():
+            log.info("found that manifest exists")
             try:
-                state = json.loads(state_path.read_text(encoding="utf-8"))
-                if state.get("input_sig_hex") == qsig_hex:
-                    # Optional extra safety: verify the manifest hash still matches
-
-                    if state.get("output_sig_hex") == compute_sha256(manifest_path):
-                        # record 'skipped' in the audit DB and return
-                        
-                        rec["status"] = "skipped"
-                        rec["output_sig"] = {"sha256": state["output_sig_hex"]}
-                        tracker.finish_run(run_id, "success")
-                        return manifest_path
-            except Exception:
-                # TODO implement this
-                # fall through to rebuild if state is unreadable
-                pass
                 
 
-    with tracker.record_step(run_id, "compute manifest", input_sig=qsig, output_path=manifest_path) as rec:
-        write_manifest_helper(
-            manifest_path,
-            tracker = tracker,
-            run_id = run_id
-        )
+
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                state_init_sig_hex = state.get("init_sig_hex")
+                log.info(f"found that state init siq hex is {state_init_sig_hex}")
+                if state_init_sig_hex == qsig_hex:
+                    # Optional extra safety: verify the manifest hash still matches
+                    previous_state_sig = state.get("output_sig_hex")
+                    current_state_sig = compute_sha256(manifest_path)
+                    log.info(f"found previous state sig {previous_state_sig} and current state sig {current_state_sig}")
+                    if previous_state_sig == compute_sha256(manifest_path):
+                        # record 'skipped' in the audit DB and return
+                        log.info("found existing state matches current: skipping")
+                        rec["status"] = "skipped"
+                        tracker.finish_run(run_id, "skipped", output_path = ODIN_MANIFEST_DIR)
+                        return manifest_path
+                    else:
+                        log.info("current state sig is new")
+                        write_manifest_helper(
+                            manifest_path,
+                            tracker = tracker,
+                            run_id = run_id,
+                            log = log,
+                            initial_quick_sig=qsig,
+                            qsig_hex=qsig_hex,
+                        )
+                else:
+                    log.info("state info not found:")
+                    write_manifest_helper(
+                        manifest_path,
+                        tracker = tracker,
+                        run_id = run_id,
+                        log = log,
+                        initial_quick_sig=qsig,
+                        qsig_hex=qsig_hex,
+                    )
+            except Exception as e:
+                rec["status"] = "failed"
+                msg = "encountered an exception while checking state: falling back on re-build"
+                rec["message"] = msg
+                log.exception(msg)
+                log.info("beginning write_manifest_helper")
+                write_manifest_helper(
+                    manifest_path,
+                    tracker = tracker,
+                    run_id = run_id,
+                    log = log,
+                    initial_quick_sig=qsig,
+                    qsig_hex=qsig_hex,
+                )
+        else:
+            log.info("found no existing manifest or state")
+            write_manifest_helper(
+                manifest_path,
+                tracker = tracker,
+                run_id = run_id,
+                initial_quick_sig=qsig,
+                qsig_hex=qsig_hex,
+                log = log
+            )
 
 def write_manifest_helper(manifest_path,
                           *,
                           tracker,
                           run_id: str,
                           initial_quick_sig: QuickManifestSig,
-                          qsig_hex: str):
+                          qsig_hex: str,
+                          log):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         print("Working in:", tmpdir)
-        manifest_temp_file_path = os.path.join(tmpdir, "manifest.yaml")
-        write_manifest(
-                        root_dir=REPO_DIR, 
-                        manifest_path = manifest_temp_file_path, 
-                        format_type="yaml", 
-                        exclude_patterns=EXCLUSIONS
-                    )
-            
-        os.replace(manifest_temp_file_path, manifest_path)
-        #audit_rec["status"] = "computed manifest file"
-        #audit_rec["output manifest path"] = manifest_path
 
-        state_path = manifest_path.with_suffix(manifest_path.suffix + ".state.json")
+        with tracker.record_step(run_id, "generating odin manifest") as rec:
+            manifest_temp_file_path = os.path.join(tmpdir, "manifest.yaml")
+            log.info("starting to generate manifest")
+            try:
+                write_manifest(
+                            root_dir=REPO_DIR, 
+                            manifest_path = manifest_temp_file_path, 
+                            format_type="yaml", 
+                            exclude_patterns=EXCLUSIONS
+                        )
+                os.replace(manifest_temp_file_path, manifest_path)
+                rec["status"] = "success"
+            except Exception as e:
+                log.exception("encountered an exception while generating/writing the manifest")
+                rec["status"] = "failed"
+                tracker.finish_run(run_id, "failed", output_path = OUTPUT_PATH)
+                raise e
 
-        out_sha = compute_sha256(manifest_path)
+        with tracker.record_step(run_id, "generating manifest state file") as rec:
+            try:
+                state_path = manifest_path.with_suffix(manifest_path.suffix + ".state.json")
+                out_sha = compute_sha256(manifest_path)
 
-        state_doc = ManifestInfo(
-            input_sig=initial_quick_sig,
-            input_sig_hex= qsig_hex,
-            output_sig_hex=out_sha,
-            generated_timestamp=datetime.now(local_zone).strftime("%Y-%m-%d_%H:%:M:%S")
-        )
-        atomic_write_text(state_path, json.dumps(state_doc, sort_keys=True, indent=2))
-        #audit_rec["output_sig"] = {"sha256": out_sha}
-        tracker.finish_run(run_id, "success")
-        manifest_path
+                state_doc = ManifestInfo(
+                    root_path=REPO_DIR,
+                    init_qsig=initial_quick_sig,
+                    init_sig_hex= qsig_hex,
+                    output_sig_hex=out_sha,
+                    timestamp=datetime.now(local_zone).strftime("%Y-%m-%d_%H:%M:%S")
+                )
+                atomic_write_text(state_path, json.dumps(asdict(state_doc), sort_keys=True, indent=2))
+                rec["status"] = "success"
+
+                log.info(f"odin manifest job completed successfully; output at {OUTPUT_PATH}")
+                tracker.finish_run(run_id, "success", 
+                           output_path = OUTPUT_PATH,
+                           output_sig_hash = state_doc.output_sig_hex)
+            except Exception as e:
+                rec["failed"]
+                tracker.finish_run(run_id, "failed", output_path = OUTPUT_PATH)
+                raise e
+    return manifest_path
 
 
 if __name__ == "__main__":

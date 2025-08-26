@@ -17,3 +17,6 @@ migrate: ## Run database migrations
 
 run_git_pull: ## Execute the Git Pull job
 	$(PY) $(ROOT)/odin_pull_git_updates.py
+
+manifest: ## Execute the job to generate the Odin manifest.
+	$(PY) $(ROOT)/odin_run_manifest_job.py

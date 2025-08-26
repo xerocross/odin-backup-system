@@ -45,8 +45,8 @@ class Tracker:
     # ---- runs ----
     def start_run(
                     self,
-                    run_name: str,
                     run_id: str,
+                    run_name: str,
                     input_sig_json: str,
                     meta: Optional[dict[str, Any]] = None
                   
@@ -63,19 +63,19 @@ class Tracker:
                 c.commit()
             except:
                 self.log.exception("could not add audit to start run")
-                raise AuditDatabaseException
+                raise AuditDatabaseException()
 
-    def finish_run(self, run_id: str, status: str, *, output_path) -> None:
+    def finish_run(self, run_id: str, status: str, *, output_path, output_sig_hash = "") -> None:
         with _connect(self.db) as c:
             try:
                 c.execute(
-                    "UPDATE runs SET finished_at=?, status=? output_path=? WHERE run_id=?",
-                    (_now(), status, output_path, run_id),
+                    "UPDATE runs SET finished_at=?, status=?, output_path=?, output_sig_hash=? WHERE run_id=?",
+                    (_now(), status, output_path, output_sig_hash, run_id),
                 )
                 c.commit()
             except:
                 self.log.exception("could not add audit to finish run")
-                raise AuditDatabaseException
+                raise AuditDatabaseException()
 
     # ---- steps ----
     def start_step(
@@ -93,7 +93,7 @@ class Tracker:
                 c.commit()
             except:
                 self.log.exception("could not initiate step in audit database")
-                raise AuditDatabaseException
+                raise AuditDatabaseException()
         return StepRef(step_id, run_id, name)
 
     def finish_step(
@@ -111,7 +111,7 @@ class Tracker:
                 c.commit()
             except:
                 self.log.exception("an exception occurred while finishing a step")
-                raise AuditDatabaseException
+                raise AuditDatabaseException()
 
     # ---- convenience: context manager for steps ----
     @contextlib.contextmanager
@@ -129,7 +129,7 @@ class Tracker:
             self.finish_step(step, status, message=message)
         except Exception as e:
             self.finish_step(step, "failed", message=str(e))
-            raise
+            raise e
 
     # ---- tiny reports ----
     def last_runs(self, limit: int = 10) -> list[tuple]:

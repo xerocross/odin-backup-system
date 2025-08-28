@@ -6,6 +6,7 @@ import sqlite3, time, json, contextlib
 from typing import Any, Optional
 from backuplib.checksumtools import canonicalize_json, sha256_hex
 from backuplib.logging import setup_logging, WithContext
+from backuplib.runonce import run_once
 
 log = setup_logging(level="INFO", appName="odin_backup_auditing")
 
@@ -41,7 +42,7 @@ class Tracker:
         #log = WithContext(log, {"run_log_id": log_run_id})
         init(self.db)
 
-    # ---- runs ----
+    @run_once
     def start_run(
                     self,
                     run_id: str,
@@ -64,6 +65,7 @@ class Tracker:
                 self.log.exception("could not add audit to start run")
                 raise AuditDatabaseException()
 
+    @run_once
     def finish_run(self, run_id: str, status: str, *, output_path="", output_sig_hash = "") -> None:
         with _connect(self.db) as c:
             try:

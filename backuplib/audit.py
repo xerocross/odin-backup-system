@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-# backuplib/audit.py
+
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,7 +64,7 @@ class Tracker:
                 self.log.exception("could not add audit to start run")
                 raise AuditDatabaseException()
 
-    def finish_run(self, run_id: str, status: str, *, output_path, output_sig_hash = "") -> None:
+    def finish_run(self, run_id: str, status: str, *, output_path="", output_sig_hash = "") -> None:
         with _connect(self.db) as c:
             try:
                 c.execute(

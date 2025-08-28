@@ -23,11 +23,12 @@ from datetime import datetime
 from fnmatch import fnmatch
 import yaml
 import tempfile
-from backuplib.checksumtools import sha256_string
+from backuplib.checksumtools import sha256_string, hash_script
 from backuplib.exceptions import ConfigException
 from backuplib.logging import setup_logging, WithContext
 from backuplib.configloader import OdinConfig, load_config
-from backuplib.jobstatehelper import load_manifest_state, manifest_state_output_sig
+from backuplib.jobstatehelper import load_manifest_state, manifest_state_output_sig, \
+        read_manifest_hash
 from backuplib.filesutil import atomic_write_text
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional
@@ -140,17 +141,56 @@ class TarballJobState:
 
 
 
+def build_new_state(
+    upstream_state_path: Path,
+    expected_tarball_path: Path,
+    manifest_hash_key: str,
+    script_path: Path,
+    #config_paths: Optional[List[Path]],
+    prior_policy: Optional[Policy] = None,
+) -> TarballJobState:
+    up = read_manifest_hash(upstream_state_path, manifest_hash_key=manifest_hash_key)
+    script_h = hash_script(script_path)
+    #config_h = hash_config(config_paths) if config_paths else None
+
+    inputs = InputsFingerprint(
+        manifest_hash=up["manifest_hash"],
+        script_hash=script_h,
+    #    config_hash=config_h,
+    )
+
+    # compute outputs from the tarball we just built
+    tar_sha = sha256_file(expected_tarball_path)
+    size = expected_tarball_path.stat().st_size
+    created_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    outputs = OutputsInfo(
+        tarball_path=str(expected_tarball_path),
+        tarball_sha256=tar_sha,
+        size_bytes=size,
+        created_at=created_at,
+    )
+
+    policy = prior_policy or Policy()
+    provenance = Provenance(
+        upstream_state_path=str(upstream_state_path),
+        manifest_state_ts=up.get("manifest_state_ts"),
+    )
+
+    return TarballJobState(
+        version=1,
+        inputs=inputs,
+        outputs=outputs,
+        policy=policy,
+        provenance=provenance,
+    )
+
 # ----------------------------
 # Helpers
 # ----------------------------
 
-
-
-
 def load_prior_step_state():
     manifest_state = load_manifest_state()
-
-
     pass
 
 @dataclass
@@ -176,6 +216,20 @@ def decide_should_run(
             if cur != prev:
                 return ShouldRunResult(True, f"{field} changed")
 
+    # ensure tarball exists (or rebuild if policy allows)
+    if not expected_tarball_path.exists():
+        if prior.policy.rebuild_if_missing:
+            return ShouldRunResult(True, "tarball missing; rebuild_if_missing=True")
+        else:
+            return ShouldRunResult(False, "tarball missing; rebuild_if_missing=False")
+
+    # verify integrity matches recorded hash if we have one
+    if prior.outputs and prior.outputs.tarball_sha256:
+        current_hash = sha256_file(expected_tarball_path)
+        if current_hash != prior.outputs.tarball_sha256:
+            return ShouldRunResult(True, "tarball hash mismatch with recorded outputs")
+
+    return ShouldRunResult(False, "inputs unchanged and tarball verified")
 
 
 def should_skip_run(config: dict) -> bool:

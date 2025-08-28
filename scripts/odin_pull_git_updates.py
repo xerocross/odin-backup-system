@@ -26,7 +26,7 @@ except KeyError as e:
 local_zone = ZoneInfo(LOCAL_ZONE)
 log = setup_logging(level="INFO", appName="odin_backup_git_pull")
 run_id = "git-pull"+str(uuid.uuid4())
-log_run_id = str(run_id)[:12]
+log_run_id = run_id
 log = WithContext(log, {"run_log_id": log_run_id})
 log.info(f"starting with run_id {run_id}")
 
@@ -42,15 +42,16 @@ def run_git_pull():
         repo_path=repo_path
     )
     qsig_json = json.dumps(asdict(qsig))
-    log.info("generated initial qsig", extra = {"repo_path": qsig.repo_path, "head_hash" : qsig.head_hash})
+    log.debug("generated initial qsig", extra = {"repo_path": qsig.repo_path, "head_hash" : qsig.head_hash})
     log.info("creating tracker")
 
     tracker.start_run(run_id=run_id,
                       run_name="odin_git_pull",
                       input_sig_json = qsig_json,
-                      meta={"job": "git pull", 
-                                    "repo_path": str(repo_path),
-                                    "timestamp" :  timestamp,
+                      meta={
+                            "job": "git pull", 
+                            "repo_path": str(repo_path),
+                            "timestamp" :  timestamp,
                         })
     try:
         return_code, rout, rerr, summary = git_pull(

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Minimal SQLite migration runner (single-file, no deps).
 
@@ -10,21 +9,25 @@ Usage:
 - Records applied migrations in `schema_migrations`.
 - Runs each migration in a transaction. Fails fast on error.
 """
-import argparse, sqlite3, sys, time, importlib.util
+
+import sys
+import pysqlite3 as sqlite3
+print("sqlite_version():", sqlite3.sqlite_version)
+import argparse, sys, time, importlib.util
 from pathlib import Path
 from typing import List, Tuple
 
-def ensure_meta(conn: sqlite3.Connection):
-    # Enforce FKs for everything the runner does
+
+
+def ensure_meta(conn):
     conn.execute("PRAGMA foreign_keys=ON;")
-    # Defer FK checks until COMMIT (SQLite 3.39+)
     try:
-        conn.execute("PRAGMA defer_foreign_keys=ON;")
+        conn.execute("PRAGMA defer_foreign_keys=ON;")  # SQLite 3.39+
     except sqlite3.OperationalError:
-        pass  # older SQLite, safe to ignore
+        pass
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS schema_migrations (
+        CREATE TABLE IF NOT EXISTS schema_migrations(
           id INTEGER PRIMARY KEY,
           name TEXT NOT NULL,
           applied_at INTEGER NOT NULL
@@ -62,22 +65,25 @@ def apply_py(conn: sqlite3.Connection, path: Path):
         raise RuntimeError(f"{path.name} must define a migrate(conn) function")
     mod.migrate(conn)
 
-def apply_one(conn: sqlite3.Connection, num: int, name: str, path: Path):
-    # Single atomic transaction per migration
+def apply_one(conn, num, name, path):
     conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA defer_foreign_keys=ON;")  # set again in case
+
+    conn.execute("BEGIN IMMEDIATE;")
     try:
-        conn.execute("BEGIN IMMEDIATE;")  # lock early; DDL is transactional in SQLite
-        if path.suffix == ".sql":
-            apply_sql(conn, path)  # do NOT BEGIN/COMMIT inside files
-        else:
-            apply_py(conn, path)   # migration code must NOT commit/rollback
+        try:
+            print("PRAGMA defer_foreign_keys =", conn.execute("PRAGMA defer_foreign_keys").fetchone()[0])
+        except sqlite3.OperationalError as e:
+            print("PRAGMA defer_foreign_keys not supported:", e)
+
+        (apply_sql if path.suffix==".sql" else apply_py)(conn, path)
         conn.execute(
-            "INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)",
+            "INSERT INTO schema_migrations (id,name,applied_at) VALUES (?,?,?)",
             (num, name, int(time.time())),
         )
         conn.commit()
     except Exception:
-        conn.rollback()  # all or nothing
+        conn.rollback()
         raise
 
 
@@ -115,6 +121,13 @@ def main(argv=None):
     dir_path.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(db_path)
+    print("sqlite3.sqlite_version =", conn.execute("select sqlite_version()").fetchone()[0])
+    print("PRAGMA foreign_keys     =", conn.execute("PRAGMA foreign_keys").fetchone()[0])
+    try:
+        print("PRAGMA defer_foreign_keys =", conn.execute("PRAGMA defer_foreign_keys").fetchone()[0])
+    except sqlite3.OperationalError as e:
+        print("PRAGMA defer_foreign_keys not supported:", e)
+
     try:
         if args.command == "status":
             cmd_status(conn, dir_path)

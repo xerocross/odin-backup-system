@@ -3,6 +3,7 @@
 import hashlib, tempfile
 from pathlib import Path
 import os, json
+from typing import Tuple
 
 class InvalidJSONException(Exception):
     '''Exception: attempted to canonicalize invalid json'''
@@ -31,7 +32,29 @@ def compute_sha256(path: str | Path, chunk_size: int = 1024 * 1024) -> str:
             h.update(chunk)
     return h.hexdigest()
 
-def write_sha256_sidecar(target: str | Path) -> Path:
+def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk: break
+            h.update(chunk)
+    return h.hexdigest()
+
+def hash_script(script_path: Path) -> str:
+    return sha256_file(script_path)
+
+def digest(obj) -> str:
+    data = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+def sha256_string(s: str) -> str:
+    return sha256_bytes(s.encode("utf-8"))
+
+def write_sha256_sidecar(target: str | Path) -> Tuple[Path, str]:
     """
     Write a sidecar checksum file: `<target>.sha256`, contents:
     <HEX>  <BASENAME>\n
@@ -47,4 +70,4 @@ def write_sha256_sidecar(target: str | Path) -> Path:
         tmp.write(f"{digest}  {target.name}\n")
         tmp_path = Path(tmp.name)
     os.replace(tmp_path, sidecar)  # atomic on same filesystem
-    return sidecar
+    return sidecar, digest

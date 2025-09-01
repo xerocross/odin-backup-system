@@ -1,6 +1,7 @@
 # logging_setup.py
 import json, logging, os, socket, sys, time
 from typing import Mapping
+from logging import Logger
 
 class JSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:

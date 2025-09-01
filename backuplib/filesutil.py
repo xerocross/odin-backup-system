@@ -4,7 +4,9 @@ from typing import Iterable, Callable
 import json, hashlib
 import os, tempfile
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Tuple
+from backuplib.checksumtools import sha256_string
+
 
 @dataclass
 class QuickManifestSig:
@@ -14,11 +16,14 @@ class QuickManifestSig:
     latest_mtime_ns : int
     total_bytes: int
 
+
+
+
 def is_excluded(path: Path, exclude_patterns: Iterable[str]):
     path_string = path.as_posix()
     return any(fnmatch.fnmatch(path_string, pattern) for pattern in exclude_patterns)
 
-def quick_scan_signature(root: Path, exclude: Iterable[str]) -> QuickManifestSig:
+def quick_scan_signature(root: Path, exclude: List) -> QuickManifestSig:
     """
     Cheap signal for 'did anything relevant change?':
       - latest mtime (ns) of any included file
@@ -42,17 +47,31 @@ def quick_scan_signature(root: Path, exclude: Iterable[str]) -> QuickManifestSig
             total_bytes += st.st_size
             if st.st_mtime_ns > latest_mtime_ns:
                 latest_mtime_ns = st.st_mtime_ns
+    return QuickManifestSig(
+        root = str(root),
+        exclude = exclude,
+        file_count = file_count,
+        latest_mtime_ns = latest_mtime_ns,
+        total_bytes = total_bytes
+    )
 
 
-    qsig = QuickManifestSig(
-                            root = str(root.resolve()),
-                            exclude = list(exclude),
-                            latest_mtime_ns = latest_mtime_ns,
-                            file_count= file_count,
-                            total_bytes=total_bytes
-                           )
-    return qsig
+@dataclass
+class QuickManifestScan:
+    root: str
+    exclude: List[str]
+    file_count: int
+    latest_mtime_ns : int
+    total_bytes: int
 
+
+def hash_quick_manifest_scan(quick_scan : QuickManifestScan):
+    digest = f"{sha256_string(str(quick_scan.file_count))}\
+        {sha256_string(str(quick_scan.latest_mtime_ns))}\
+            {sha256_string(str(quick_scan.total_bytes))}"
+    return sha256_string(digest)
+
+    
 
 def digest(obj) -> str:
     data = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")

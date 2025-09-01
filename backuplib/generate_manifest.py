@@ -56,14 +56,14 @@ def is_excluded(path, exclude_patterns):
     return any(fnmatch.fnmatch(path_string, pattern) for pattern in exclude_patterns)
 
 def is_excluded_cleaned(path_str, exclude_patterns):
-    print(f"checking whether to exclude \"{path_str}\"")
-    print("exclude patterns:")
-    print(exclude_patterns)
+    #print(f"checking whether to exclude \"{path_str}\"")
+    #print("exclude patterns:")
+    #print(exclude_patterns)
     if exclude_patterns is None:
         return False
 
     is_exclude = any(fnmatch.fnmatch(path_str, pattern) for pattern in exclude_patterns)
-    print(f"excluded: {is_exclude}")
+    #print(f"excluded: {is_exclude}")
     return is_exclude
 
 def build_flat_list(root_path, exclude_patterns):
@@ -87,12 +87,12 @@ def build_file_list(root_path : Path, exclude_patterns=None):
     print(exclude_patterns)
     for file_path in root_path.rglob("*"):
         if file_path.is_file():
-            print(f"checking file {file_path}")
+            #print(f"checking file {file_path}")
             rel_path = file_path.relative_to(root_path).as_posix()
             is_file_excluded = is_excluded_cleaned(rel_path, exclude_patterns)
             
             if is_file_excluded:
-                print(f"excluding file {rel_path}")
+                #print(f"excluding file {rel_path}")
                 continue
             stat = file_path.stat()
             size_bytes = stat.st_size
@@ -134,4 +134,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     write_manifest(args.directory, args.output, args.format)
-    print(f"Manifest written to {args.output}")
+    #print(f"Manifest written to {args.output}")

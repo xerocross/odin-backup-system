@@ -1,0 +1,141 @@
+from pathlib import Path
+from backuplib.configloader import OdinConfig, load_config
+from typing import Iterable, Optional
+import subprocess
+import datetime
+from zoneinfo import ZoneInfo
+import os, tempfile
+from backuplib.logging import setup_logging, Logger, WithContext
+from backuplib.checksumtools import sha256_file
+from backuplib.jobstatehelper import get_upstream_hash, get_hash
+from backuplib.filesutil import atomic_write_text
+import json
+import shutil
+import uuid
+
+
+odinConfig: OdinConfig = load_config()
+logger : Logger = setup_logging()
+run_id = "odin-encrypt-"+str(uuid.uuid4())
+logger = WithContext(logger, {"run_id": run_id})
+utc_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+class GPGError(RuntimeError):
+    pass
+
+
+def write_state_file(encrypted_tarball_path: Path, upstream_hash : str):
+    try:
+        logger.info("writing state file for odin encrypted tarball job")
+        hash = sha256_file(encrypted_tarball_path)
+        state = {
+            "hash" : hash,
+            "datetime": utc_timestamp,
+            "upstream_hash": upstream_hash
+        }
+        statefile_path = odinConfig.encryption_job.dir / odinConfig.encryption_job.statefile_name
+        atomic_write_text(path = statefile_path, text = f"{json.dumps(state)}\n")
+        logger.info(f"state file for odin encrypted tarball written to {statefile_path}")
+    except:
+        logger.exception("could not generated state file for encrypted tarball job")
+
+def encrypt_tarball_to_recipient(
+    tarball: Path | str,
+    recipient: str,
+    out_path: Path | str,
+    *,
+    gpg_binary: str = "gpg",
+    armor: bool = False,
+    extra_args: Optional[Iterable[str]] = None,
+    overwrite: bool = True,
+) -> Path:
+    """
+    Encrypt `tarball` to the given public-key `recipient` (must exist in your GPG keyring).
+    Returns the output path.
+    """
+    tarball = Path(tarball)
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not tarball.is_file():
+        raise FileNotFoundError(f"Tarball not found: {tarball}")
+
+    if out_path.exists() and not overwrite:
+        raise FileExistsError(f"Refusing to overwrite: {out_path}")
+
+    cmd = [gpg_binary, "--batch", "--yes", "--encrypt", "--recipient", recipient, "-o", str(out_path)]
+    if armor:
+        cmd.append("--armor")
+    if extra_args:
+        cmd.extend(extra_args)
+
+    # Input file comes last
+    cmd.append(str(tarball))
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except FileNotFoundError as e:
+        raise GPGError(f"Could not find gpg binary '{gpg_binary}'. Is GnuPG installed?") from e
+
+    if res.returncode != 0:
+        raise GPGError(f"GPG failed (code {res.returncode}).\nSTDERR:\n{res.stderr.strip()}")
+
+    return out_path
+
+
+
+def read_latest_tarball(marker_file: str) -> Path:
+    marker_path = Path(marker_file)  # normalize the marker file path itself
+    with marker_path.open("r") as f:
+        line = f.readline().strip()
+    return Path(line)  # system-independent Path object
+
+def main():
+    try:
+        tz = ZoneInfo(odinConfig.local_zone)
+        timestamp = datetime.datetime.now(tz).strftime("%Y_%m_%d-%H%M")
+        upstream_hash = get_hash(odinConfig.encryption_job.upstream_statepath)
+
+
+        tarball_dir = odinConfig.tarball_dir_idempotent
+        latest_tarball_path = tarball_dir / odinConfig.default_tarball_name
+        logger.info(f"read that latest odin tarball is at {latest_tarball_path}")
+        if not latest_tarball_path.exists():
+            logger.error(f"could not find what was supposed to be the the most recent odin tarball: {latest_tarball_path}")
+            raise FileNotFoundError(f"File does not exist: {latest_tarball_path}")
+
+        encrypted_odin_path = odinConfig.encrypted_dir
+
+        encrypted_file_name = odinConfig.encrypted_tarball_name
+        encrypted_tarball_path = encrypted_odin_path / encrypted_file_name
+
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / encrypted_file_name
+
+            encrypted_tarball = encrypt_tarball_to_recipient (
+                tarball=latest_tarball_path,
+                recipient=odinConfig.recipient,
+                out_path=out_path
+            )
+            os.replace(encrypted_tarball, encrypted_tarball_path)
+        logger.info(f"wrote new encrypted tarball of odin to {encrypted_tarball_path}")
+        copy_tarball_to_dropbox(encrypted_tarball_path, timestamp=timestamp)
+        write_state_file(encrypted_tarball_path=encrypted_tarball_path, upstream_hash=upstream_hash)
+
+
+    except:
+        logger.exception("was not able to create the encrypted odin backup")
+
+
+def copy_tarball_to_dropbox(encrypted_tarball_path : Path, timestamp : str):
+    new_folder_for_sync = odinConfig.offsite_sync_dir / f"OdinVault-{timestamp}"
+    encrypted_file_name = odinConfig.encrypted_tarball_name
+    new_folder_for_sync.mkdir(parents=True, exist_ok=True)
+    shutil.copy(encrypted_tarball_path, new_folder_for_sync / encrypted_file_name)
+    logger.info(f"copied encrypted tarball to {new_folder_for_sync}")
+
+
+# Example usage:
+if __name__ == "__main__":
+    main()

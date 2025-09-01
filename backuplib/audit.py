@@ -7,6 +7,7 @@ from typing import Any, Optional
 from backuplib.checksumtools import canonicalize_json, sha256_hex
 from backuplib.logging import setup_logging, WithContext
 from backuplib.runonce import run_once
+import functools
 
 log = setup_logging(level="INFO", appName="odin_backup_auditing")
 
@@ -47,13 +48,16 @@ class Tracker:
                     self,
                     run_id: str,
                     run_name: str,
-                    input_sig_json: str,
+                    input_sig_json: str = None,
                     meta: Optional[dict[str, Any]] = None
                   
                   ) -> None:
         
-        canonical_input_sig_json = canonicalize_json(input_sig_json)
-        input_sig_hash = sha256_hex(canonical_input_sig_json)
+        canonical_input_sig_json = ""
+        input_sig_hash=""
+        if input_sig_json is not None:
+            canonical_input_sig_json = canonicalize_json(input_sig_json)
+            input_sig_hash = sha256_hex(canonical_input_sig_json)
         with _connect(self.db) as c:
             try:
                 c.execute(
@@ -114,6 +118,9 @@ class Tracker:
                 self.log.exception("an exception occurred while finishing a step")
                 raise AuditDatabaseException()
 
+    
+
+
     # ---- convenience: context manager for steps ----
     @contextlib.contextmanager
     def record_step(
@@ -131,6 +138,33 @@ class Tracker:
         except Exception as e:
             self.finish_step(step, "failed", message=str(e))
             raise e
+        
+        
+    def audit_this(self, run_id, name):
+        """
+        Decorator factory: takes run_id and step name,
+        returns a decorator that wraps the function to record it.
+        """
+        def decorator(func):
+            tracker = self
+            @functools.wraps(func)
+            def wrapper(*args, **kwargs):
+                # create the step in DB
+                step = tracker.start_step(run_id, name)
+                rec = {}  # the "audit handle" dict
+                try:
+                    # call the original function, injecting `rec`
+                    result = func(tracker, rec, *args, **kwargs)
+                    status = rec.get("status", "success")
+                    message = rec.get("message", "")
+                    tracker.finish_step(step, status, message)
+                    return result
+                except Exception as e:
+                    tracker.finish_step(step, "failed", message=str(e))
+                    raise
+            return wrapper
+        return decorator
+        
 
     # ---- tiny reports ----
     def last_runs(self, limit: int = 10) -> list[tuple]:
@@ -154,3 +188,6 @@ class Tracker:
                     (run_id,),
                 )
             )
+            
+
+            

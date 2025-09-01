@@ -183,7 +183,7 @@ def git_pull(
             rec["status"] = "failed"
             raise FetchFailed
 
-    with tracker.record_step(run_id, "perform fetch") as rec:
+    with tracker.record_step(run_id, "get target sha") as rec:
         # Get remote/target sha after fetch
         rc, target_sha, err = git_rev_parse(repo_path, target_ref)
         if rc != 0:

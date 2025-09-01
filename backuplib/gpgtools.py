@@ -74,3 +74,72 @@ def encrypt_with_gpg_atomic(
         try: tmp_path.unlink(missing_ok=True)
         finally: pass
         raise e
+
+class GPGError(RuntimeError): pass
+
+def gpg_sign_detached(
+    artifact: Path,
+    *,
+    signer: str | None = None,      # key id / fingerprint / uid to sign with
+    armor: bool = False,            # True -> .asc, False -> .sig (binary)
+    homedir: Path | None = None,    # use a dedicated keyring dir if you want
+    digest_algo: str = "SHA256",
+    output: Path | None = None,     # override signature path
+) -> Path:
+    """
+    Create a detached signature for `artifact` using gpg.
+    Returns the path to the signature file.
+    """
+    artifact = Path(artifact)
+    if not artifact.is_file():
+        raise FileNotFoundError(f"Artifact not found: {artifact}")
+
+    sig_ext = ".asc" if armor else ".sig"
+    if output is None:
+        output = artifact.with_suffix(artifact.suffix + sig_ext)
+
+    # Build the command.
+    cmd = ["gpg", "--batch", "--yes","--pinentry-mode","loopback", "--passphrase-fd", "0", "--detach-sign", f"--digest-algo={digest_algo}"]
+    if armor:
+        cmd.append("--armor")
+    if signer:
+        cmd += ["--local-user", signer]
+    if homedir:
+        cmd += ["--homedir", str(homedir)]
+
+    # If you need non-interactive passphrase use loopback.
+    env = os.environ.copy()
+
+    # We write to a temp file and then atomically rename.
+    output = Path(output)
+    tmpdir = output.parent
+    tmpdir.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix=output.name, dir=tmpdir, delete=False) as tf:
+        tmp_path = Path(tf.name)
+
+    cmd += ["--output", str(tmp_path), str(artifact)]
+
+    # Run gpg and capture output for logs.
+    with open("/home/adam/.backup-secrets/gpg_sign.pass","rb") as f:
+        proc = subprocess.run(cmd, stdin=f, capture_output=True, text=True)
+    if proc.returncode != 0:
+        # Clean up temp file on failure
+        try: tmp_path.unlink(missing_ok=True)
+        except Exception: pass
+        raise GPGError(f"gpg sign failed ({proc.returncode}). stderr:\n{proc.stderr.strip()}")
+
+    # fsync then atomic rename for durability
+    with open(tmp_path, "rb") as f:
+        os.fsync(f.fileno())
+    os.replace(tmp_path, output)
+    return output
+
+
+def gpg_verify_detached(artifact: Path, signature: Path, *, homedir: Path | None = None) -> bool:
+    """Return True if signature verifies, False otherwise (no exception)."""
+    cmd = ["gpg", "--batch", "--verify"]
+    if homedir:
+        cmd += ["--homedir", str(homedir)]
+    cmd += [str(signature), str(artifact)]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    return proc.returncode == 0

@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 # Log everything to journald with a stable identifier
-exec > >(tee >(systemd-cat --identifier=odin-quick_manifest --priority=info) >&1)
+exec > >(tee >(systemd-cat --identifier=odin-quick-manifest --priority=info) >&1)
 
 # Optional: ensure predictable locale/time (helps JSON timestamps)
 export LC_ALL=C.UTF-8

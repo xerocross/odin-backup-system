@@ -41,6 +41,10 @@ class OdinConfig:
     encrypted_tarball_name: str
     quick_manifest_config : QuickManifestConfig
     encryption_job : EncryptionJob
+    rsync_mirroring : list[str]
+    sidecar_root : str
+    rsync_exclusions_file : Path
+    rsync_mirroring_file : str
 
 
 def load_config() -> OdinConfig:
@@ -79,8 +83,11 @@ def load_config() -> OdinConfig:
                         upstream_statepath = Path(config["ENCRYPTION_JOB"]["upstream_statepath"]),
                         dir = Path(config["ENCRYPTION_JOB"]["dir"]),
                         statefile_name = Path(config["ENCRYPTION_JOB"]["statefile_name"])
-                    )
-
+                    ),
+                    rsync_mirroring=config["RSYNC_MIRRORING"],
+                    sidecar_root=config["SIDECAR_ROOT"],
+                    rsync_exclusions_file=Path(config["RSYNC_EXCLUSIONS_FILE"]),
+                    rsync_mirroring_file= config["RSYNC_MIRRORING_FILE"]
                 )
 
         # ODIN_MANIFEST_DIR = Path(config["ODIN_MANIFEST_DIR"])

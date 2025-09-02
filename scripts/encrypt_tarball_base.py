@@ -9,6 +9,7 @@ from backuplib.logging import setup_logging, Logger, WithContext
 from backuplib.checksumtools import sha256_file
 from backuplib.jobstatehelper import get_upstream_hash, get_hash
 from backuplib.filesutil import atomic_write_text
+from backuplib.audit import Tracker
 import json
 import shutil
 import uuid
@@ -20,11 +21,20 @@ run_id = "odin-encrypt-"+str(uuid.uuid4())
 logger = WithContext(logger, {"run_id": run_id})
 utc_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+tracker = Tracker()
+
+tracker.start_run(run_id=run_id,
+                run_name="odin_encrypt_tarball",
+                meta={
+                    "timestamp" :  utc_timestamp,
+                    "timezone" : odinConfig.local_zone
+                })
+
 class GPGError(RuntimeError):
     pass
 
 
-def write_state_file(encrypted_tarball_path: Path, upstream_hash : str):
+def write_state_file(statefile_path: Path, encrypted_tarball_path: Path, upstream_hash : str):
     try:
         logger.info("writing state file for odin encrypted tarball job")
         hash = sha256_file(encrypted_tarball_path)
@@ -33,7 +43,6 @@ def write_state_file(encrypted_tarball_path: Path, upstream_hash : str):
             "datetime": utc_timestamp,
             "upstream_hash": upstream_hash
         }
-        statefile_path = odinConfig.encryption_job.dir / odinConfig.encryption_job.statefile_name
         atomic_write_text(path = statefile_path, text = f"{json.dumps(state)}\n")
         logger.info(f"state file for odin encrypted tarball written to {statefile_path}")
     except:
@@ -83,18 +92,41 @@ def encrypt_tarball_to_recipient(
     return out_path
 
 
-
 def read_latest_tarball(marker_file: str) -> Path:
     marker_path = Path(marker_file)  # normalize the marker file path itself
     with marker_path.open("r") as f:
         line = f.readline().strip()
     return Path(line)  # system-independent Path object
 
+def copy_tarball_to_dropbox(encrypted_tarball_path : Path, timestamp : str):
+    new_folder_for_sync = odinConfig.offsite_sync_dir / f"OdinVault-{timestamp}"
+    encrypted_file_name = odinConfig.encrypted_tarball_name
+    new_folder_for_sync.mkdir(parents=True, exist_ok=True)
+    shutil.copy(encrypted_tarball_path, new_folder_for_sync / encrypted_file_name)
+    logger.info(f"copied encrypted tarball to {new_folder_for_sync}")
+
 def main():
     try:
+        statefile_path = odinConfig.encryption_job.dir / odinConfig.encryption_job.statefile_name
         tz = ZoneInfo(odinConfig.local_zone)
         timestamp = datetime.datetime.now(tz).strftime("%Y_%m_%d-%H%M")
-        upstream_hash = get_hash(odinConfig.encryption_job.upstream_statepath)
+        
+        with tracker.record_step(run_id =run_id, 
+                                    name = "compare state hashes"
+                                    ) as rec:
+        
+            try:
+                upstream_hash = get_hash(odinConfig.encryption_job.upstream_statepath)
+                previous_run_upstream_hash = get_upstream_hash(statefile_path)
+
+                if upstream_hash == previous_run_upstream_hash:
+                    logger.info("there was no upstream change recorded: skipping")
+                    tracker.finish_run(run_id, "skipped")
+                    rec["message"] = "no upstream change"
+                rec["status"] = "success"
+            except:
+                rec["status"] = "failed"
+                raise
 
 
         tarball_dir = odinConfig.tarball_dir_idempotent
@@ -105,35 +137,57 @@ def main():
             raise FileNotFoundError(f"File does not exist: {latest_tarball_path}")
 
         encrypted_odin_path = odinConfig.encrypted_dir
-
         encrypted_file_name = odinConfig.encrypted_tarball_name
         encrypted_tarball_path = encrypted_odin_path / encrypted_file_name
 
+        with tracker.record_step(run_id =run_id, 
+                                    name = "generate encrypted_tarball"
+                                    ) as rec:
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    out_path = Path(tmpdir) / encrypted_file_name
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            out_path = Path(tmpdir) / encrypted_file_name
+                    encrypted_tarball = encrypt_tarball_to_recipient (
+                        tarball=latest_tarball_path,
+                        recipient=odinConfig.recipient,
+                        out_path=out_path
+                    )
+                    os.replace(encrypted_tarball, encrypted_tarball_path)
+                    logger.info(f"wrote new encrypted tarball of odin to {encrypted_tarball_path}")
+                    rec["status"] = "success"
+            except:
+                rec["status"] = "failed"
+                raise
+        
+        with tracker.record_step(run_id =run_id, 
+                                    name = "copy to dropbox"
+                                    ) as rec:
+            try:
+                copy_tarball_to_dropbox(encrypted_tarball_path, timestamp=timestamp)
+                
+                rec["status"] = "success"
+            except:
+                rec["status"] = "failed"
+                raise
 
-            encrypted_tarball = encrypt_tarball_to_recipient (
-                tarball=latest_tarball_path,
-                recipient=odinConfig.recipient,
-                out_path=out_path
-            )
-            os.replace(encrypted_tarball, encrypted_tarball_path)
-        logger.info(f"wrote new encrypted tarball of odin to {encrypted_tarball_path}")
-        copy_tarball_to_dropbox(encrypted_tarball_path, timestamp=timestamp)
-        write_state_file(encrypted_tarball_path=encrypted_tarball_path, upstream_hash=upstream_hash)
-
+        with tracker.record_step(run_id =run_id, 
+                                            name = "write statefile"
+                                            ) as rec:
+            try:
+                write_state_file(statefile_path = statefile_path, 
+                                 encrypted_tarball_path=encrypted_tarball_path, 
+                                 upstream_hash=upstream_hash)
+                rec["status"] = "success"
+            except:
+                rec["status"] = "failed"
+                raise
 
     except:
+        tracker.finish_run(run_id, "failed")
         logger.exception("was not able to create the encrypted odin backup")
 
 
-def copy_tarball_to_dropbox(encrypted_tarball_path : Path, timestamp : str):
-    new_folder_for_sync = odinConfig.offsite_sync_dir / f"OdinVault-{timestamp}"
-    encrypted_file_name = odinConfig.encrypted_tarball_name
-    new_folder_for_sync.mkdir(parents=True, exist_ok=True)
-    shutil.copy(encrypted_tarball_path, new_folder_for_sync / encrypted_file_name)
-    logger.info(f"copied encrypted tarball to {new_folder_for_sync}")
+
 
 
 # Example usage:

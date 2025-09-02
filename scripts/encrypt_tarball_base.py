@@ -123,6 +123,7 @@ def main():
                     logger.info("there was no upstream change recorded: skipping")
                     tracker.finish_run(run_id, "skipped")
                     rec["message"] = "no upstream change"
+                    return
                 rec["status"] = "success"
             except:
                 rec["status"] = "failed"

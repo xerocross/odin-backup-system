@@ -9,7 +9,7 @@ from backuplib.logging import setup_logging, Logger, WithContext
 from backuplib.checksumtools import sha256_file
 from backuplib.jobstatehelper import get_upstream_hash, get_hash
 from backuplib.filesutil import atomic_write_text
-from backuplib.audit import Tracker
+from backuplib.audit import Tracker, RunSignature
 import json
 import shutil
 import uuid
@@ -34,12 +34,11 @@ class GPGError(RuntimeError):
     pass
 
 
-def write_state_file(statefile_path: Path, encrypted_tarball_path: Path, upstream_hash : str):
+def write_state_file(statefile_path: Path, new_run_signature: str, upstream_hash : str):
     try:
         logger.info("writing state file for odin encrypted tarball job")
-        hash = sha256_file(encrypted_tarball_path)
         state = {
-            "hash" : hash,
+            "hash" : new_run_signature,
             "datetime": utc_timestamp,
             "upstream_hash": upstream_hash
         }
@@ -108,6 +107,11 @@ def copy_tarball_to_dropbox(encrypted_tarball_path : Path, timestamp : str):
 def main():
     try:
         statefile_path = odinConfig.encryption_job.dir / odinConfig.encryption_job.statefile_name
+        previous_job_signature = get_hash(odinConfig.encryption_job.upstream_statepath)
+        tracker.set_signature_data(run_id = run_id, 
+                                           signature_data=previous_job_signature, 
+                                           column=RunSignature.PREVIOUS_JOB_SIGNATURE)
+        
         tz = ZoneInfo(odinConfig.local_zone)
         timestamp = datetime.datetime.now(tz).strftime("%Y_%m_%d-%H%M")
         
@@ -118,7 +122,12 @@ def main():
             try:
                 upstream_hash = get_hash(odinConfig.encryption_job.upstream_statepath)
                 previous_run_upstream_hash = get_upstream_hash(statefile_path)
-
+                tracker.set_signature_data(run_id = run_id, 
+                                           signature_data=upstream_hash, 
+                                           column=RunSignature.CURRENT_UPSTREAM_SIGNATURE)
+                tracker.set_signature_data(run_id = run_id, 
+                                           signature_data=previous_run_upstream_hash, 
+                                           column=RunSignature.PREVIOUS_UPSTREAM_SIGNATURE)
                 if upstream_hash == previous_run_upstream_hash:
                     logger.info("there was no upstream change recorded: skipping")
                     tracker.finish_run(run_id, "skipped")
@@ -129,6 +138,8 @@ def main():
                 rec["status"] = "failed"
                 raise
 
+
+        #tracker.set_input_sig_hash(run_id=run_id, input_sig_hash : str):
 
         tarball_dir = odinConfig.tarball_dir_idempotent
         latest_tarball_path = tarball_dir / odinConfig.default_tarball_name
@@ -165,7 +176,6 @@ def main():
                                     ) as rec:
             try:
                 copy_tarball_to_dropbox(encrypted_tarball_path, timestamp=timestamp)
-                
                 rec["status"] = "success"
             except:
                 rec["status"] = "failed"
@@ -175,22 +185,24 @@ def main():
                                             name = "write statefile"
                                             ) as rec:
             try:
+                new_run_signature = sha256_file(encrypted_tarball_path)
                 write_state_file(statefile_path = statefile_path, 
-                                 encrypted_tarball_path=encrypted_tarball_path, 
+                                 new_run_signature = new_run_signature,
                                  upstream_hash=upstream_hash)
                 rec["status"] = "success"
             except:
                 rec["status"] = "failed"
                 raise
 
+        tracker.set_signature_data(run_id = run_id, 
+                                           signature_data=new_run_signature, 
+                                           column=RunSignature.JOB_RESULT_SIGNATURE)
+        tracker.finish_run(run_id, "success")
+        logger.exception("success")
     except:
         tracker.finish_run(run_id, "failed")
         logger.exception("was not able to create the encrypted odin backup")
 
 
-
-
-
-# Example usage:
 if __name__ == "__main__":
     main()

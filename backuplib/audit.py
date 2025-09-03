@@ -8,6 +8,7 @@ from backuplib.checksumtools import canonicalize_json, sha256_hex
 from backuplib.logging import setup_logging, WithContext
 from backuplib.runonce import run_once
 import functools
+from enum import Enum, auto
 
 log = setup_logging(level="INFO", appName="odin_backup_auditing")
 
@@ -35,6 +36,18 @@ class StepRef:
     run_id: str
     name: str
 
+class RunSignature(Enum):
+    CURRENT_UPSTREAM_SIGNATURE = "current_upstream_signature"
+    PREVIOUS_UPSTREAM_SIGNATURE = "previous_upstream_signature"
+    JOB_RESULT_SIGNATURE = "job_result_signature"
+    PREVIOUS_JOB_SIGNATURE = "previous_job_signature"
+
+
+    def __str__(self):
+        # customize how you want it to appear when converted to str
+        return self.value
+
+
 class Tracker:
 
     def __init__(self, db_path: Path = DEFAULT_DB):
@@ -42,6 +55,10 @@ class Tracker:
         self.log = log
         #log = WithContext(log, {"run_log_id": log_run_id})
         init(self.db)
+
+
+
+    
 
     @run_once
     def start_run(
@@ -67,6 +84,32 @@ class Tracker:
                 c.commit()
             except:
                 self.log.exception("could not add audit to start run")
+                raise AuditDatabaseException()
+
+    def set_signature_data(self, run_id: str, signature_data: RunSignature, column: RunSignature):
+        column_str = str(column)
+        with _connect(self.db) as c:
+            try:
+                c.execute(
+                    f"UPDATE runs SET {column_str}=?,WHERE run_id=?",
+                    (signature_data, run_id),
+                )
+                c.commit()
+            except:
+                msg = f"could not add {column_str} to audit db"
+                self.log.exception(msg)
+                raise AuditDatabaseException(msg)
+
+    def set_current_upstream_signature(self, run_id: str, current_upstream_signature: str):
+        with _connect(self.db) as c:
+            try:
+                c.execute(
+                    "UPDATE runs SET current_upstream_signature=?,WHERE run_id=?",
+                    (current_upstream_signature, run_id),
+                )
+                c.commit()
+            except:
+                self.log.exception("could not add current_upstream_signature to audit db")
                 raise AuditDatabaseException()
 
     @run_once

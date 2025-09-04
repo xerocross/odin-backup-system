@@ -6,11 +6,12 @@ from backuplib.filesutil import atomic_write_text
 from backuplib.gpgtools import gpg_sign_detached
 from backuplib.audit import Tracker
 from backuplib.jobstatehelper import get_hash, get_upstream_hash
+from pydeclarativelib.pydeclarativelib import make_a_tarball
+from pydeclarativelib.declarativeaudit import audited_by
 import tarfile
 import datetime
 from fnmatch import fnmatch
 from zoneinfo import ZoneInfo
-import tempfile
 import shutil, os
 import json
 import uuid
@@ -27,17 +28,19 @@ def path_matches_any(rel: str, patterns: list[str]) -> bool:
     """Match POSIX-style relative path against glob patterns (supports **)."""
     return any(fnmatch(rel, pat) for pat in patterns)
 
-def make_idempotent_copy(
-                    new_tarball_file_path: Path, 
-                    tarball_dir_idempotent : Path) -> None:
-    shutil.copy(new_tarball_file_path, tarball_dir_idempotent)
-
-
-
-
-    
 
 tracker = Tracker()
+
+
+@audited_by(tracker, with_step_name="make idempotent copy", and_run_id = run_id)
+def make_idempotent_copy(
+                    new_tarball_file_path: Path, 
+                    tarball_dir_idempotent : Path):
+    shutil.copy(new_tarball_file_path, tarball_dir_idempotent)
+    return (True, None)
+
+
+
 
 tracker.start_run(run_id=run_id,
                 run_name="odin_tarball",
@@ -56,13 +59,22 @@ def create_tarball(
     Excludes are matched against POSIX-style relative paths.
     """
     logger.info(f"Creating tarball: {dest_tar_gz}")
-    with tarfile.open(dest_tar_gz, "w:gz") as tar:
-        for p in repo_dir.rglob("*"):
-            rel = p.relative_to(repo_dir).as_posix()
-            if exclude_patterns and path_matches_any(rel, exclude_patterns):
-                continue
-            # Preserve directory structure but avoid including the repo root name.
-            tar.add(p, arcname=rel)
+    use_new_method = True
+    if use_new_method:
+        logger.info("using new make_a_tarball method")
+        try:
+            make_a_tarball(of_dir= repo_dir, at=dest_tar_gz, excluding=exclude_patterns)
+        except:
+            logger.exception("could not make tarball using new method")
+            raise
+    else:    
+        with tarfile.open(dest_tar_gz, "w:gz") as tar:
+            for p in repo_dir.rglob("*"):
+                rel = p.relative_to(repo_dir).as_posix()
+                if exclude_patterns and path_matches_any(rel, exclude_patterns):
+                    continue
+                # Preserve directory structure but avoid including the repo root name.
+                tar.add(p, arcname=rel)
 
 
 def write_state(marker_file : Path,
@@ -90,6 +102,8 @@ def write_idempotent_state(
 
 def main():
     try:
+        do_regardless = True
+
         with tracker.record_step(run_id =run_id, 
                              name = "check for state change"
                              ) as rec:
@@ -102,12 +116,13 @@ def main():
                 if statepath.exists():
                     last_recorded_upstream_hash = get_upstream_hash(statefile_path=statepath)
                 logger.info(f"upstream_hash: {upstream_hash}; last_recorded_upstream_hash: {last_recorded_upstream_hash}")
-                if upstream_hash == last_recorded_upstream_hash:
-                    logger.info("skipping because no upstream changes")
-                    rec["status"] = "success"
-                    rec["message"] = "no upstream change: skipping"
-                    tracker.finish_run(run_id, "skipped")
-                    return
+                if not do_regardless:
+                    if upstream_hash == last_recorded_upstream_hash:
+                        logger.info("skipping because no upstream changes")
+                        rec["status"] = "success"
+                        rec["message"] = "no upstream change: skipping"
+                        tracker.finish_run(run_id, "skipped")
+                        return
             except:
                 logger.exception("error: could not get the upstream hashes")
                 rec["status"] = "failed"
@@ -158,12 +173,15 @@ def main():
             except:
                 rec["status"] = "failed"
                 raise
+                
         
+        make_idempotent_copy(tarball_path, tarball_idempotent_path)
+
         with tracker.record_step(run_id =run_id, 
-                             name = "generate idempotent copy"
+                             name = "write idempotent state"
                              ) as rec:
             try:
-                make_idempotent_copy(tarball_path, tarball_idempotent_path)
+                
                 write_idempotent_state(
                                             tarball_idempotent_path,
                                             upstream_hash=upstream_hash

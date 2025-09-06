@@ -80,3 +80,24 @@ def make_a_tarball(of_dir: Path, at : Path, excluding : List[str]):
                         gz = True
                         )
         
+
+
+def write_text_atomic(at: Path, the_text: str):
+    path = at
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", delete=False, dir=path.parent,
+            prefix=path.name + ".", suffix=".part", encoding="utf-8"
+        ) as tmp:
+            tmp.write(the_text)
+            tmp.flush()
+            os.fsync(tmp.fileno())  # durability before publish
+            tmp_path = Path(tmp.name)
+        os.replace(tmp_path, path)  # atomic publish => tmp name disappears
+    except Exception:
+        if tmp_path is not None:
+            try: os.unlink(tmp_path)   # cleanup only on failure
+            except OSError: pass
+        raise

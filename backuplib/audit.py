@@ -8,7 +8,7 @@ from backuplib.checksumtools import canonicalize_json, sha256_hex
 from backuplib.logging import setup_logging, WithContext
 from backuplib.runonce import run_once
 import functools
-from enum import Enum, auto
+from enum import Enum
 
 log = setup_logging(level="INFO", appName="odin_backup_auditing")
 
@@ -17,7 +17,6 @@ DEFAULT_DB = Path.home() / ".odin_backup" / "audit.db"
 class AuditDatabaseException(Exception):
     '''There was a problem with the Odin Backup Audit Database'''
     pass
-
 
 def _now() -> int: return int(time.time())
 
@@ -44,7 +43,6 @@ class RunSignature(Enum):
 
 
     def __str__(self):
-        # customize how you want it to appear when converted to str
         return self.value
 
 
@@ -55,10 +53,6 @@ class Tracker:
         self.log = log
         #log = WithContext(log, {"run_log_id": log_run_id})
         init(self.db)
-
-
-
-    
 
     @run_once
     def start_run(
@@ -91,7 +85,7 @@ class Tracker:
         with _connect(self.db) as c:
             try:
                 c.execute(
-                    f"UPDATE runs SET {column_str}=?,WHERE run_id=?",
+                    f"UPDATE runs SET {column_str}=? WHERE run_id=?",
                     (signature_data, run_id),
                 )
                 c.commit()
@@ -99,18 +93,6 @@ class Tracker:
                 msg = f"could not add {column_str} to audit db"
                 self.log.exception(msg)
                 raise AuditDatabaseException(msg)
-
-    def set_current_upstream_signature(self, run_id: str, current_upstream_signature: str):
-        with _connect(self.db) as c:
-            try:
-                c.execute(
-                    "UPDATE runs SET current_upstream_signature=?,WHERE run_id=?",
-                    (current_upstream_signature, run_id),
-                )
-                c.commit()
-            except:
-                self.log.exception("could not add current_upstream_signature to audit db")
-                raise AuditDatabaseException()
 
     @run_once
     def finish_run(self, run_id: str, status: str, *, output_path="", output_sig_hash = "") -> None:
@@ -160,9 +142,6 @@ class Tracker:
             except:
                 self.log.exception("an exception occurred while finishing a step")
                 raise AuditDatabaseException()
-
-    
-
 
     # ---- convenience: context manager for steps ----
     @contextlib.contextmanager

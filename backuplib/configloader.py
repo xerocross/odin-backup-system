@@ -20,6 +20,10 @@ class EncryptionJob:
     statefile_name : str
 
 @dataclass
+class RsyncMirroringJob:
+    upstream_statepath : Path
+
+@dataclass
 class OdinConfig:
     repo_dir : Path
     manifest_exclusions : list[str]
@@ -45,6 +49,7 @@ class OdinConfig:
     sidecar_root : str
     rsync_exclusions_file : Path
     rsync_mirroring_file : str
+    rsync_mirroring_job : RsyncMirroringJob
 
 
 def load_config() -> OdinConfig:
@@ -87,14 +92,11 @@ def load_config() -> OdinConfig:
                     rsync_mirroring=config["RSYNC_MIRRORING"],
                     sidecar_root=config["SIDECAR_ROOT"],
                     rsync_exclusions_file=Path(config["RSYNC_EXCLUSIONS_FILE"]),
-                    rsync_mirroring_file= config["RSYNC_MIRRORING_FILE"]
+                    rsync_mirroring_file= config["RSYNC_MIRRORING_FILE"],
+                    rsync_mirroring_job = RsyncMirroringJob(
+                        upstream_statepath=Path(config["RSYNC_MIRRORING_JOB"]["UPSTREAM_STATEPATH"])
+                    )
                 )
-
-        # ODIN_MANIFEST_DIR = Path(config["ODIN_MANIFEST_DIR"])
-        # EXCLUSIONS = config["EXCLUSIONS"]
-        # OUTPUT_PATH = config["OUTPUT_PATH"]
-        # LOCAL_ZONE = config["LOCAL_ZONE"]
-        # MANIFEST_STATE_NAME = config["MANIFEST_STATE_NAME"]
         return odinConfig
     except KeyError as e:
         raise ConfigException(f"Missing required config key. Config path: {CONFIG_PATH}.")

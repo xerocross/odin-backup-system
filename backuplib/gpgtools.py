@@ -77,6 +77,7 @@ def encrypt_with_gpg_atomic(
 
 class GPGError(RuntimeError): pass
 
+
 def gpg_sign_detached(
     artifact: Path,
     *,

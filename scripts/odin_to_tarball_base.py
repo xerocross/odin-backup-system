@@ -4,13 +4,13 @@ from backuplib.logging import setup_logging, Logger, WithContext
 from backuplib.configloader import OdinConfig, load_config
 from backuplib.checksumtools import write_sha256_sidecar
 from backuplib.gpgtools import gpg_sign_detached
-from backuplib.audit import Tracker
+from backuplib.audit import Tracker, RunSignature
 from backuplib.jobstatehelper import get_hash, get_upstream_hash
 from pydeclarativelib.pydeclarativelib import make_a_tarball, write_text_atomic
 from pydeclarativelib.declarativeaudit import audited_by
 from pydeclarativelib.declarativesuccess import with_try_except_and_trace
+from dataclasses import dataclass, field
 import datetime
-from fnmatch import fnmatch
 from zoneinfo import ZoneInfo
 import shutil, os
 import json
@@ -23,10 +23,6 @@ datestamp = datetime.datetime.now(tz).strftime("%Y_%m_%d-%H-%M")
 utc_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 run_id = "odin-tarball-"+str(uuid.uuid4())
 logger = WithContext(logger, {"run_id": run_id})
-
-def path_matches_any(rel: str, patterns: list[str]) -> bool:
-    """Match POSIX-style relative path against glob patterns (supports **)."""
-    return any(fnmatch(rel, pat) for pat in patterns)
 
 
 tracker = Tracker()
@@ -68,6 +64,11 @@ def write_state(
     write_text_atomic(at=marker_file, the_text = latest_tarball + "\n")
     return {"success": True}
 
+@dataclass
+class IdempotentStateData:
+    job_hash : str
+    datetime: str
+
 @audited_by(tracker, with_step_name="write idempotent state", and_run_id = run_id)
 @with_try_except_and_trace(if_success_then_message=None, if_failed_then_message=None, with_trace=trace)
 def write_idempotent_state(
@@ -83,11 +84,15 @@ def write_idempotent_state(
         "hash" : hash,
         "upstream_hash": upstream_hash
     }
+    data: IdempotentStateData = IdempotentStateData(job_hash=hash, datetime=utc_timestamp)
     logger.info(f"generated idempotent odin backup with datetime {utc_timestamp} and sha245 {hash}")
     write_text_atomic(at=statefile_path, the_text=f"{json.dumps(state)}\n")
     msg = f"generated Odin tarball state file at {statefile_path}"
     logger.info(msg)
-    return {"success": True, "message" : msg} 
+    return {"success": True, "message" : msg, "data" : data} 
+
+
+
 
 @audited_by(tracker, with_step_name="sign idempotent copy", and_run_id = run_id)
 @with_try_except_and_trace(if_success_then_message=None, if_failed_then_message=None, with_trace=trace)
@@ -103,6 +108,12 @@ def gpg_sign(
         )
         return {"success": True, "sig_path": sig_file} 
 
+@dataclass
+class StateCheckData:
+    upstream_hash : str
+    last_recorded_upstream_hash : str
+
+
 @audited_by(tracker, with_step_name="check for state change", and_run_id = run_id)
 @with_try_except_and_trace(if_success_then_message=None, if_failed_then_message=None, with_trace=trace)
 def check_for_state_change(
@@ -116,8 +127,9 @@ def check_for_state_change(
     if statepath.exists():
         last_recorded_upstream_hash = get_upstream_hash(statefile_path=statepath)
     logger.info(f"upstream_hash: {upstream_hash}; last_recorded_upstream_hash: {last_recorded_upstream_hash}")
-    data = {"upstream_hash": upstream_hash,
-            "last_recorded_upstream_hash": last_recorded_upstream_hash}
+    data = StateCheckData(upstream_hash= upstream_hash,
+                          last_recorded_upstream_hash=last_recorded_upstream_hash
+                          )
     if upstream_hash == last_recorded_upstream_hash:
         
         result = {"success": True, "message": "no upstream change: skipping","upstream_hash_has_not_changed" : True}
@@ -132,24 +144,40 @@ def check_for_state_change(
 
 def main():
     try:
-        do_regardless = True
+        do_regardless = False
 
         ## setup paths
         statepath = odin_cfg.tarball_dir_idempotent / odin_cfg.tarball_state_filename
         upstream_statepath = odin_cfg.tarball_job_upstream_statepath
-
+        previous_job_hash = get_hash(statepath)
 
         state_chage_results = check_for_state_change(
                 statepath = statepath,
                 upstream_statepath = upstream_statepath,
         )
         do_skip = state_chage_results["upstream_hash_has_not_changed"]
+        state_check_data : StateCheckData = state_chage_results["data"]
+        upstream_hash = state_check_data.upstream_hash
+        last_recorded_upstream_hash = state_check_data.last_recorded_upstream_hash
+
+        tracker.set_signature_data(run_id = run_id,
+                                   signature_data = previous_job_hash, 
+                                   column = RunSignature.PREVIOUS_JOB_SIGNATURE)
+
+        tracker.set_signature_data(run_id = run_id,
+                                   signature_data = upstream_hash, 
+                                   column = RunSignature.CURRENT_UPSTREAM_SIGNATURE)
+
+        tracker.set_signature_data(run_id = run_id,
+                           signature_data = last_recorded_upstream_hash, 
+                           column = RunSignature.PREVIOUS_UPSTREAM_SIGNATURE)
+
         if do_skip and not do_regardless:
             logger.info("skipping because upstream hash has not changed")
             tracker.finish_run(run_id, "skipped")
             return
         
-        upstream_hash = state_chage_results["data"]["upstream_hash"]
+        
         repo_dir = odin_cfg.repo_dir
         exclude_list = odin_cfg.tarball_exclusions
         tarball_location = odin_cfg.tarball_dir
@@ -175,10 +203,15 @@ def main():
                                 tarball_dir_idempotent= tarball_idempotent_path
                             )
     
-        write_idempotent_state(
+        idempotent_state_res = write_idempotent_state(
                                 tarball_idempotent_path = tarball_idempotent_path,
                                 upstream_hash = upstream_hash
                               )
+        idempotent_state_data : IdempotentStateData = idempotent_state_res["data"]
+
+        tracker.set_signature_data(run_id = run_id,
+                           signature_data = idempotent_state_data.job_hash, 
+                           column = RunSignature.JOB_RESULT_SIGNATURE)
         
         gpg_sign(the_item= tarball_idempotent_path,by_signer=odin_cfg.recipient)
 
@@ -188,6 +221,7 @@ def main():
     except Exception as e:
         tracker.finish_run(run_id, "failed")
         logger.error("FAILED")
+        trace = [t for t in trace if t is not None]
         logger.error("trace: [" + ", ".join(trace) + "]\n")
         logger.exception("did not generate the Odin backup tarball successfully")
 

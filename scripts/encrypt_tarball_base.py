@@ -107,7 +107,7 @@ def copy_tarball_to_dropbox(encrypted_tarball_path : Path, timestamp : str):
 def main():
     try:
         statefile_path = odinConfig.encryption_job.dir / odinConfig.encryption_job.statefile_name
-        previous_job_signature = get_hash(odinConfig.encryption_job.upstream_statepath)
+        previous_job_signature = get_hash(statefile_path)
         tracker.set_signature_data(run_id = run_id, 
                                            signature_data=previous_job_signature, 
                                            column=RunSignature.PREVIOUS_JOB_SIGNATURE)

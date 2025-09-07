@@ -101,3 +101,8 @@ def write_text_atomic(at: Path, the_text: str):
             try: os.unlink(tmp_path)   # cleanup only on failure
             except OSError: pass
         raise
+
+def is_path_matches_amy_pattern(path: str, patterns: list[str]) -> bool:
+    """Match POSIX-style relative path against glob patterns (supports **)."""
+    return _path_matches_any(path: str, patterns: list[str])
+

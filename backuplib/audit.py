@@ -51,7 +51,6 @@ class Tracker:
     def __init__(self, db_path: Path = DEFAULT_DB):
         self.db = db_path
         self.log = log
-        #log = WithContext(log, {"run_log_id": log_run_id})
         init(self.db)
 
     @run_once

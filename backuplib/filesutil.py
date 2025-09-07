@@ -71,7 +71,11 @@ def hash_quick_manifest_scan(quick_scan : QuickManifestScan):
             {sha256_string(str(quick_scan.total_bytes))}"
     return sha256_string(digest)
 
-    
+def file_to_lines_list(from_file: Path):
+    with open(from_file, 'r') as f:
+        lines = f.readlines()
+    return lines
+
 
 def digest(obj) -> str:
     data = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")

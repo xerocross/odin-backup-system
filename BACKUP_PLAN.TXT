@@ -1,0 +1,5 @@
+/home/adam/Projects/odin-backup-system/run_odin_git_pull.sh
+/home/adam/Projects/odin-backup-system/run_quick_manifest_job.sh
+/home/adam/Projects/odin-backup-system/run_rsync_mirror_job.sh
+/home/adam/Projects/odin-backup-system/run_tarball_script.sh
+/home/adam/Projects/odin-backup-system/run_encrypted_backup_script.sh

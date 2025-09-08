@@ -93,6 +93,20 @@ class Tracker:
                 self.log.exception(msg)
                 raise AuditDatabaseException(msg)
 
+    def set_parent_id(self, run_id: str, parent_id: str):
+        with _connect(self.db) as c:
+            try:
+                c.execute(
+                    f"UPDATE runs SET parent_run=? WHERE run_id=?",
+                    (parent_id, run_id),
+                )
+                c.commit()
+            except:
+                msg = f"could not add parent_run to audit db"
+                self.log.exception(msg)
+                raise AuditDatabaseException(msg)
+
+
     @run_once
     def finish_run(self, run_id: str, status: str, *, output_path="", output_sig_hash = "") -> None:
         with _connect(self.db) as c:

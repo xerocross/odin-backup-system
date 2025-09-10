@@ -23,3 +23,5 @@ cd /home/adam/Projects/odin-backup-system
 # Nice/ionice so it stays polite under load (optional)
 nice -n 10 ionice -c2 -n7 \
   python -m scripts.odin_pull_git_updates
+
+exit 0

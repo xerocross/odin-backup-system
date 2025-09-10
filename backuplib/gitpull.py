@@ -141,9 +141,8 @@ def git_pull(
     Returns (returncode, stdout, stderr, summary_dict).
     """
 
-    # run_id = uuid.uuid4()
-    log_run_id = str(run_id)[:12]
-    log = WithContext(global_log, {"run_log_id": log_run_id})
+
+    log = WithContext(global_log, {"run_log_id": run_id})
 
     log.debug("starting git pull operation")
     summary = {"result": None, "before": None, "after": None, "target": None, "remote": remote, "branch": branch}

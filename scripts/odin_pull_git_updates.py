@@ -7,52 +7,80 @@ import datetime
 from backuplib.audit import Tracker
 from backuplib.logging import setup_logging, WithContext
 from backuplib.exceptions import ConfigException
-from backuplib.filesutil import atomic_write_text
+from pydeclarativelib.pydeclarativelib import write_text_atomic
 from backuplib.configloader import load_config, OdinConfig
 from dataclasses import asdict
+from backuplib.backupjob import BackupJobResult
+from pydeclarativelib.declarativeaudit import audited_by
+from pydeclarativelib.declarativesuccess import with_try_except_and_trace
+from typing import List
 import json
 import uuid
 import yaml
 
-CONFIG_PATH = Path("~/.config/odin/odin_run_git_pull_job.yaml").expanduser()
-with open(CONFIG_PATH, "r") as f:
-    config = yaml.safe_load(f)
-try:
-    REPO_DIR = config["REPO_DIR"]
-    LOCAL_ZONE = config["LOCAL_ZONE"]
-    OUTPUT_PATH = config["OUTPUT_PATH"]
-except KeyError as e:
-    raise ConfigException(f"Missing required config key. Config path: {CONFIG_PATH}.")
+def run(parent_id : str):
+    return run_git_pull(parent_id=parent_id)
 
-odin_cfg: OdinConfig = load_config()
-
-local_zone = ZoneInfo(LOCAL_ZONE)
-log = setup_logging(level="INFO", appName="odin_backup_git_pull")
-run_id = "git-pull-"+str(uuid.uuid4())
-log = WithContext(log, {"run_id": run_id})
-log.info(f"starting with run_id {run_id}")
-utc_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
-
-
-def run():
-    return run_git_pull()
-
-def write_statefile():
-    repo_dir = odin_cfg.repo_dir
-    statefile = repo_dir / odin_cfg.git_pull_statefile_name
-    state = {
-        "hash" : get_git_headhash(repo_path=repo_dir),
-        "datetime" : utc_timestamp
-    }
-    atomic_write_text(path=statefile, text=f"{json.dumps(state)}\n")
-    pass
-
-
-def run_git_pull():
+def run_git_pull(parent_id : str = None):
+    log = setup_logging(level="INFO", appName="odin_backup_git_pull")
+    run_id = "git-pull-"+str(uuid.uuid4())
+    log = WithContext(log, {"run_id": run_id})
+    if parent_id is not None:
+        log = WithContext(log, {"parent_id": parent_id})
     try:
-        repo_path = Path(REPO_DIR)
-        timestamp = datetime.datetime.now(local_zone).strftime("%Y-%m-%d_%H%M%S")
+
+        CONFIG_PATH = Path("~/.config/odin/odin_run_git_pull_job.yaml").expanduser()
+
+        with open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(f)
+        try:
+            REPO_DIR = config["REPO_DIR"]
+            LOCAL_ZONE = config["LOCAL_ZONE"]
+            OUTPUT_PATH = config["OUTPUT_PATH"]
+        except KeyError as e:
+            raise ConfigException(f"Missing required config key. Config path: {CONFIG_PATH}.")
+
+
         tracker = Tracker()
+        trace : List[str] = []
+        odin_cfg: OdinConfig = load_config()
+
+        local_zone = ZoneInfo(LOCAL_ZONE)
+        
+        
+        log.info(f"starting with run_id {run_id}")
+        utc_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+        def write_statefile():
+            repo_dir = odin_cfg.repo_dir
+            statefile = repo_dir / odin_cfg.git_pull_statefile_name
+            state = {
+                "hash" : get_git_headhash(repo_path=repo_dir),
+                "datetime" : utc_timestamp
+            }
+            write_text_atomic(at=statefile, the_text=f"{json.dumps(state)}\n")
+
+
+        @audited_by(tracker, with_step_name="generate qsig", and_run_id = run_id)
+        @with_try_except_and_trace(if_success_then_message=None, if_failed_then_message=None, with_trace=trace)
+        def generate_qsig_local(from_root : Path):
+            qsig: QuickGitRepoSig = generate_qsig(
+                            repo_path=odin_cfg.repo_dir
+                        )
+            qsig_json = json.dumps(asdict(qsig))
+            log.debug(f"qsig_json: {qsig_json}")
+            log.debug("generated initial qsig", extra = {"repo_path": qsig.repo_path, "head_hash" : qsig.head_hash})
+            return {"success" : True,
+                    "message": "",
+                    "data" : {
+                        "qsig_json" : qsig_json
+                    }}
+
+
+        repo_path = odin_cfg.repo_dir
+        timestamp = datetime.datetime.now(local_zone).strftime("%Y-%m-%d_%H%M%S")
+        
         log.debug("creating tracker")
         tracker.start_run(run_id=run_id,
                       run_name="odin_git_pull",
@@ -63,26 +91,12 @@ def run_git_pull():
                             "timezone" : LOCAL_ZONE
                         })
     
-        with tracker.record_step(run_id =run_id, 
-                             name = "generate qsig"
-                             ) as rec:
- 
-            try:
-                qsig: QuickGitRepoSig = generate_qsig(
-                    repo_path=repo_path
-                )
-                qsig_json = json.dumps(asdict(qsig))
-                log.debug(f"qsig_json: {qsig_json}")
-                log.debug("generated initial qsig", extra = {"repo_path": qsig.repo_path, "head_hash" : qsig.head_hash})
-                
-                rec["status"] = "success"
-            except:
-                rec["status"] = "failed"
-            
-            
-            
-            
-        
+        if parent_id is not None:
+            tracker.set_parent_id(run_id=run_id, parent_id=parent_id)
+
+
+        generate_qsig_local(from_root=repo_path)
+
         return_code, rout, rerr, summary = git_pull(
             repo_path = repo_path,
             remote = "origin",
@@ -108,18 +122,17 @@ def run_git_pull():
         tracker.finish_run(run_id, "success", 
                            output_path= OUTPUT_PATH, 
                            output_sig_hash=head_hash)
-        log.info("success")
+        log.info(str(BackupJobResult.SUCCESS))
+        result= {
+                    "success": True, 
+                    "message": "", 
+                }
+        return result
     except Exception as e:
-        log.exception(f"there was an exception {e}")
+        log.error(str(BackupJobResult.FAILED))
+        log.exception(f"git pull did not finish")
         tracker.finish_run(run_id, "failed", output_path = OUTPUT_PATH)
         raise e
 
 if __name__ == "__main__":
-    try:
-        log.info('start', extra={"ODIN_JOB":"git_pull","PHASE":"start"})
-        run()
-        log.info('done',  extra={"ODIN_JOB":"git_pull","PHASE":"done"})
-    except Exception:
-        # One journald entry including full traceback:
-        log.exception('git pull failed', extra={"ODIN_JOB":"git_pull","PHASE":"error"})
-        raise
+    run(parent_id=None)

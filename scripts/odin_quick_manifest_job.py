@@ -26,12 +26,7 @@ logger = setup_logging(appName = "quick_manifest_job")
 logger = WithContext(logger, {"run_id": run_id})
 
 
-tracker.start_run(run_id=run_id,
-                run_name="odin_tarball",
-                meta={
-                    "timestamp" :  utc_timestamp,
-                    "timezone" : odin_config.local_zone
-                })
+
 
 @audited_by(tracker, with_step_name="write state", and_run_id = run_id)
 @with_try_except_and_trace(if_success_then_message="wrote state", if_failed_then_message="could not write state", with_trace=trace)
@@ -78,8 +73,17 @@ def write_quickmanifest(quickmanifestscan: QuickManifestScan):
         "message": ""
     }
 
-def run():
+def run(parent_id = None):
     try:
+        tracker.start_run(run_id=run_id,
+                run_name="odin_quick_manifest",
+                meta={
+                    "timestamp" :  utc_timestamp,
+                    "timezone" : odin_config.local_zone
+                })
+        if parent_id is not None:
+            tracker.set_parent_id(run_id=run_id, parent_id=parent_id)
+
         upstream_job_hash = ""
         repo_dir = odin_config.repo_dir
         statefile_name = odin_config.quick_manifest_config.statefile_name
@@ -93,16 +97,18 @@ def run():
                 logger.info("no upstream changes: skipping job")
                 logger.info(f"{BackupJobResult.SKIPPED}")
                 tracker.finish_run(run_id, "skipped")
-                return
+                return {"success" : True}
         qscan: QuickManifestScan = quick_scan_signature(root = repo_dir, exclude = odin_config.manifest_exclusions)
         hash = sha256_string(f"{hash_quick_manifest_scan(quick_scan = qscan)}:{upstream_job_hash}") 
         write_state(statefile_path=statefile_path, quick_manifest_scan_hash = hash, upstream_hash=upstream_job_hash)
         write_quickmanifest(qscan)
         logger.info(f"{BackupJobResult.SUCCESS}")
         tracker.finish_run(run_id, "success")
+        return {"success" : True}
     except:
         logger.exception(f"{BackupJobResult.FAILED}")
         tracker.finish_run(run_id, "failed")
+        raise
 
 if __name__ == "__main__":
     run()

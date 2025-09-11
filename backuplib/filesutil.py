@@ -17,7 +17,13 @@ class QuickManifestSig:
     total_bytes: int
 
 
-
+@dataclass
+class QuickManifestScan:
+    root: str
+    exclude: List[str]
+    file_count: int
+    latest_mtime_ns : int
+    total_bytes: int
 
 def is_excluded(path: Path, exclude_patterns: Iterable[str]):
     path_string = path.as_posix()
@@ -56,13 +62,7 @@ def quick_scan_signature(root: Path, exclude: List) -> QuickManifestSig:
     )
 
 
-@dataclass
-class QuickManifestScan:
-    root: str
-    exclude: List[str]
-    file_count: int
-    latest_mtime_ns : int
-    total_bytes: int
+
 
 
 def hash_quick_manifest_scan(quick_scan : QuickManifestScan):

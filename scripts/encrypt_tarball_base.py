@@ -10,6 +10,7 @@ from backuplib.checksumtools import sha256_file
 from backuplib.jobstatehelper import get_upstream_hash, get_hash
 from backuplib.filesutil import atomic_write_text
 from backuplib.audit import Tracker, RunSignature
+from backuplib.backupjob import BackupJobResult
 import json
 import shutil
 import uuid
@@ -23,12 +24,6 @@ utc_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 tracker = Tracker()
 
-tracker.start_run(run_id=run_id,
-                run_name="odin_encrypt_tarball",
-                meta={
-                    "timestamp" :  utc_timestamp,
-                    "timezone" : odinConfig.local_zone
-                })
 
 class GPGError(RuntimeError):
     pass
@@ -104,8 +99,21 @@ def copy_tarball_to_dropbox(encrypted_tarball_path : Path, timestamp : str):
     shutil.copy(encrypted_tarball_path, new_folder_for_sync / encrypted_file_name)
     logger.info(f"copied encrypted tarball to {new_folder_for_sync}")
 
-def main():
+def run(parent_id : str = None):
+    return main(parent_id=parent_id)
+
+def main(parent_id :str = None):
     try:
+        tracker.start_run(run_id=run_id,
+                run_name="odin_encrypt_tarball",
+                meta={
+                    "timestamp" :  utc_timestamp,
+                    "timezone" : odinConfig.local_zone
+                })
+        
+        if parent_id is not None:
+            tracker.set_parent_id(run_id=run_id, parent_id=parent_id)
+
         statefile_path = odinConfig.encryption_job.dir / odinConfig.encryption_job.statefile_name
         previous_job_signature = get_hash(statefile_path)
         tracker.set_signature_data(run_id = run_id, 
@@ -130,9 +138,10 @@ def main():
                                            column=RunSignature.PREVIOUS_UPSTREAM_SIGNATURE)
                 if upstream_hash == previous_run_upstream_hash:
                     logger.info("there was no upstream change recorded: skipping")
+                    logger.info(str(BackupJobResult.SKIPPED))
                     tracker.finish_run(run_id, "skipped")
                     rec["message"] = "no upstream change"
-                    return
+                    return {"success": True}
                 rec["status"] = "success"
             except:
                 rec["status"] = "failed"
@@ -198,11 +207,13 @@ def main():
                                            signature_data=new_run_signature, 
                                            column=RunSignature.JOB_RESULT_SIGNATURE)
         tracker.finish_run(run_id, "success")
-        logger.exception("success")
+        logger.info(str(BackupJobResult.SUCCESS))
+        return {"success": True}
     except:
         tracker.finish_run(run_id, "failed")
+        logger.error(str(BackupJobResult.FAILED))
         logger.exception("was not able to create the encrypted odin backup")
-
+        raise
 
 if __name__ == "__main__":
-    main()
+    main(parent_id=None)

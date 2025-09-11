@@ -61,17 +61,6 @@ local_zone = ZoneInfo(LOCAL_ZONE)
 
 odinConfig: OdinConfig = load_config()
 
-#
-# class run_context:
-#     def __init__(self, tracker, run_id):
-#         self.tok_t = self.tok_r = None
-#         self.tracker, self.run_id = tracker, run_id
-#     def __enter__(self):
-#         self.tok_t = current_tracker.set(self.tracker)
-#         self.tok_r = current_run_id.set(self.run_id)
-#     def __exit__(self, *exc):
-#         current_run_id.reset(self.tok_r)
-#         current_tracker.reset(self.tok_t)
 
 
 @dataclass
@@ -136,33 +125,7 @@ def run():
 
 
 
-def perform_initial_job_setup(odinConfig: OdinConfig, *, 
-                              run_id : str, 
-                              logger : Logger) -> ManifestInfo:
-    
-    logger.info(f"starting the odin manifest job run_id: {run_id}")
-    out_dir = Path(ODIN_MANIFEST_DIR)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = odinConfig.manifest_dir / odinConfig.manifest_file_name
-    state_path = odinConfig.manifest_dir / odinConfig.manifest_state_name
-    logger.debug(f"found state path: {state_path}")
-    quick_signature : QuickManifestSig = quick_scan_signature(
-                                            root = odinConfig.repo_dir, 
-                                            exclude=odinConfig.manifest_exclusions
-                                        )
-    initial_signature_hash = digest(asdict(quick_signature))
-    logger.info(f"computed initial quick-signature hash: {initial_signature_hash}")
-    current_manifest_sig = compute_sha256(manifest_path)
-    manifestInfo = ManifestInfo(
-        run_id = run_id,
-        repo_dir = odinConfig.repo_dir,
-        init_qsig = quick_signature,
-        initial_signature_hash = initial_signature_hash,
-        manifest_path = manifest_path,
-        state_path = state_path,
-        current_manifest_sig = current_manifest_sig
-    )
-    return manifestInfo
+
 
 
 def get_manifest_path(odinConfig : OdinConfig) -> Path:
@@ -290,13 +253,44 @@ def decide_whether_to_do_this_job(
 
 
 def odin_run_manifest_job():
+
     run_id = "manifest-" + str(uuid.uuid4())
     logger = WithContext(global_log, {"log_id": run_id})
     
-    
 
-    
-    
+    def perform_initial_job_setup(
+                                odinConfig: OdinConfig,
+                                *, 
+                                run_id : str, 
+                                logger : Logger) -> ManifestInfo:
+        
+        logger.info(f"starting the odin manifest job run_id: {run_id}")
+
+        out_dir = odinConfig.manifest_dir / odinConfig.manifest_file_name
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = odinConfig.manifest_dir / odinConfig.manifest_file_name
+        state_path = odinConfig.manifest_dir / odinConfig.manifest_state_name
+        logger.debug(f"found state path: {state_path}")
+        quick_signature : QuickManifestSig = quick_scan_signature(
+                                                root = odinConfig.repo_dir, 
+                                                exclude=odinConfig.manifest_exclusions
+                                            )
+        initial_signature_hash = digest(asdict(quick_signature))
+        logger.info(f"computed initial quick-signature hash: {initial_signature_hash}")
+        current_manifest_sig = compute_sha256(manifest_path)
+        manifestInfo = ManifestInfo(
+            run_id = run_id,
+            repo_dir = odinConfig.repo_dir,
+            init_qsig = quick_signature,
+            initial_signature_hash = initial_signature_hash,
+            manifest_path = manifest_path,
+            state_path = state_path,
+            current_manifest_sig = current_manifest_sig
+        )
+        return manifestInfo
+
+
     try:
         tracker = Tracker()
         tracker.start_run(run_id = run_id,
@@ -344,69 +338,45 @@ def odin_run_manifest_job():
     
 
 
-def generate_odin_manifest():
-    pass
+        def generate_odin_manifest():
+            pass
 
 
-def write_manifest_helper(manifest_path,
-                          *,
-                          tracker : Tracker,
-                          run_id: str,
-                          initial_quick_sig: QuickManifestSig,
-                          qsig_hex: str,
-                          logger : Logger):
+    # def write_manifest_helper(manifest_path,
+    #                         *,
+    #                         tracker : Tracker,
+    #                         run_id: str,
+    #                         initial_quick_sig: QuickManifestSig,
+    #                         qsig_hex: str,
+    #                         logger : Logger):
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        logger.debug(f"working in temporary directory {tmpdir}")
-        
-        with tracker.record_step(run_id, "generating odin manifest") as rec:
-            
-            
-            manifest_temp_file_path = os.path.join(tmpdir, "manifest.yaml")
-            logger.info("starting to generate manifest")
-            try:
-                write_manifest(
-                            root_dir=REPO_DIR, 
-                            manifest_path = manifest_temp_file_path, 
+
+
+    def write_the_manifest(manifest_path: Path):
+        logger.info("starting to generate manifest")
+        write_manifest(
+                            root_dir=odinConfig.repo_dir, 
+                            manifest_path = manifest_path, 
                             format_type="yaml", 
-                            exclude_patterns=EXCLUSIONS
+                            exclude_patterns=odinConfig.manifest_exclusions
                         )
-                os.replace(manifest_temp_file_path, manifest_path)
-                rec["status"] = "success"
-            except Exception as e:
-                logger.exception(f"generating odin manifest failed")
-                rec["status"] = "failed"
-                tracker.finish_run(run_id, "failed", output_path = OUTPUT_PATH)
-                raise e
+        logger.info(f"generated manifest at {manifest_path}")
+
+    def generate_manifest_state_file():
+        state_path = odinConfig.manifest_dir / odinConfig.manifest_state_name
+        out_sha = compute_sha256(manifest_path)
+        state_doc = ManifestInfo(
+            repo_dir=odinConfig.repo_dir,
+            init_qsig=initial_quick_sig,
+            initial_signature_hash= qsig_hex,
+            output_signature_hash=out_sha,
+            timestamp=datetime.now(local_zone).strftime("%Y-%m-%d_%H:%M:%S")
+        )
+        atomic_write_text(state_path, json.dumps(asdict(state_doc), sort_keys=True, indent=2))
+        logger.info(f"odin manifest job completed successfully; output at {OUTPUT_PATH}")
 
 
-
-
-        with tracker.record_step(run_id, "generating manifest state file") as rec:
-            try:
-                state_path = odinConfig.manifest_dir / odinConfig.manifest_state_name
-                
-                
-                out_sha = compute_sha256(manifest_path)
-
-                state_doc = ManifestInfo(
-                    repo_dir=REPO_DIR,
-                    init_qsig=initial_quick_sig,
-                    initial_signature_hash= qsig_hex,
-                    output_signature_hash=out_sha,
-                    timestamp=datetime.now(local_zone).strftime("%Y-%m-%d_%H:%M:%S")
-                )
-                atomic_write_text(state_path, json.dumps(asdict(state_doc), sort_keys=True, indent=2))
-                rec["status"] = "success"
-
-                logger.info(f"odin manifest job completed successfully; output at {OUTPUT_PATH}")
-                tracker.finish_run(run_id, "success", 
-                           output_path = OUTPUT_PATH,
-                           output_sig_hash = state_doc.output_signature_hash)
-            except Exception as e:
-                rec["failed"]
-                tracker.finish_run(run_id, "failed", output_path = OUTPUT_PATH)
-                raise e
+       
     return manifest_path
 
 

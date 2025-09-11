@@ -6,7 +6,6 @@ import sqlite3, time, json, contextlib
 from typing import Any, Optional
 from backuplib.checksumtools import canonicalize_json, sha256_hex
 from backuplib.logging import setup_logging, WithContext
-from backuplib.runonce import run_once
 import functools
 from enum import Enum
 
@@ -53,7 +52,14 @@ class Tracker:
         self.log = log
         init(self.db)
 
-    @run_once
+    class JobTrackingStatus(Enum):
+        SUCCESS = "success"
+        SKIPPED = "skipped"
+        FAILED = "failed"
+
+        def __str__(self):
+            return self.value
+
     def start_run(
                     self,
                     run_id: str,
@@ -107,13 +113,17 @@ class Tracker:
                 raise AuditDatabaseException(msg)
 
 
-    @run_once
-    def finish_run(self, run_id: str, status: str, *, output_path="", output_sig_hash = "") -> None:
+    def finish_run(self, run_id: str, 
+                   status: str| JobTrackingStatus, 
+                   *, 
+                   output_path="", 
+                   output_sig_hash = "") -> None:
+        status_str = str(status)
         with _connect(self.db) as c:
             try:
                 c.execute(
                     "UPDATE runs SET finished_at=?, status=?, output_path=?, output_sig_hash=? WHERE run_id=?",
-                    (_now(), status, output_path, output_sig_hash, run_id),
+                    (_now(), status_str, output_path, output_sig_hash, run_id),
                 )
                 c.commit()
             except:
@@ -142,19 +152,20 @@ class Tracker:
     def finish_step(
         self,
         step: StepRef,
-        status: str,
+        status: str | JobTrackingStatus,
         message: str
     ) -> None:
+        status_str = str(status)
         with _connect(self.db) as c:
             try:
                 c.execute(
                     "UPDATE steps SET finished_at=?, status=?, message=? WHERE id=?",
-                    (_now(), status, message, step.id),
+                    (_now(), status_str, message, step.id),
                 )
                 c.commit()
-            except:
+            except Exception as e:
                 self.log.exception("an exception occurred while finishing a step")
-                raise AuditDatabaseException()
+                raise AuditDatabaseException() from e
 
     # ---- convenience: context manager for steps ----
     @contextlib.contextmanager

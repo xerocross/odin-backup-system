@@ -10,6 +10,7 @@ from pydeclarativelib.pydeclarativelib import make_a_tarball, write_text_atomic
 from pydeclarativelib.declarativeaudit import audited_by
 from pydeclarativelib.declarativesuccess import with_try_except_and_trace
 from dataclasses import dataclass, field
+from backuplib.backupjob import BackupJobResult
 import datetime
 from zoneinfo import ZoneInfo
 import shutil, os
@@ -28,12 +29,7 @@ logger = WithContext(logger, {"run_id": run_id})
 tracker = Tracker()
 trace : List[str] = []
 
-tracker.start_run(run_id=run_id,
-                run_name="odin_tarball",
-                meta={
-                    "timestamp" :  utc_timestamp,
-                    "timezone" : odin_cfg.local_zone
-                })
+
 
 
 @audited_by(tracker, with_step_name="make idempotent copy", and_run_id = run_id)
@@ -142,9 +138,22 @@ def check_for_state_change(
     return {**result, "data" : data}
 
 
-def main():
+def run(parent_id: str = None):
+    return main(parent_id=parent_id)
+
+def main(parent_id : str = None):
     try:
         do_regardless = False
+
+        tracker.start_run(run_id=run_id,
+                run_name="odin_tarball",
+                meta={
+                    "timestamp" :  utc_timestamp,
+                    "timezone" : odin_cfg.local_zone
+                })
+        
+        if parent_id is not None:
+            tracker.set_parent_id(run_id=run_id, parent_id=parent_id)
 
         ## setup paths
         statepath = odin_cfg.tarball_dir_idempotent / odin_cfg.tarball_state_filename
@@ -175,7 +184,7 @@ def main():
         if do_skip and not do_regardless:
             logger.info("skipping because upstream hash has not changed")
             tracker.finish_run(run_id, "skipped")
-            return
+            return {"success": True}
         
         
         repo_dir = odin_cfg.repo_dir
@@ -216,14 +225,16 @@ def main():
         gpg_sign(the_item= tarball_idempotent_path,by_signer=odin_cfg.recipient)
 
 
-        logger.info("SUCCESS")
+        logger.info(str(BackupJobResult.SUCCESS))
         tracker.finish_run(run_id, "success", output_path = str(odin_cfg.tarball_dir_idempotent))
+        return {"success": True}
     except Exception as e:
         tracker.finish_run(run_id, "failed")
-        logger.error("FAILED")
+        logger.error(str(BackupJobResult.FAILED))
         trace = [t for t in trace if t is not None]
         logger.error("trace: [" + ", ".join(trace) + "]\n")
         logger.exception("did not generate the Odin backup tarball successfully")
-
+        raise e
+    
 if __name__ == "__main__":
-    main()
+    main(parent_id=None)

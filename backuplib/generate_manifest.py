@@ -6,7 +6,10 @@ import fnmatch
 from datetime import datetime
 import yaml
 from backuplib.checksumtools import compute_sha256
+from pydeclarativelib.pydeclarativelib import safe_open_for_writing
+from backuplib.logging import setup_logging, Logger
 
+logger : Logger = setup_logging(appName = "manifest-generator")
 
 def write_manifest(root_dir, 
                    manifest_path, 
@@ -15,27 +18,27 @@ def write_manifest(root_dir,
     print(f"Scanning contents of {root_dir}")
     root_path = Path(root_dir).resolve()
 
-    with open(manifest_path, "w", encoding="utf-8") as manifest:
-
-        if format_type == "tree":
+    
+    if format_type == "tree":
+        with safe_open_for_writing(to_path=manifest_path) as manifest:
             tree, _ = build_tree(root_path=root_path, 
-                              exclude_patterns=exclude_patterns)
+                            exclude_patterns=exclude_patterns)
             for dir_path in sorted(tree):
                 indent = "  " * len(dir_path.parts)
                 manifest.write(f"{indent}{dir_path.as_posix()}/\n")
                 for name, checksum in sorted(tree[dir_path]):
                     manifest.write(f"{indent}  {name}  {checksum}\n")
-        elif format_type == "yaml":
-            write_manifest_yaml(root_dir=root_dir, 
-                                manifest_path=manifest_path, 
-                                exclude_patterns=exclude_patterns)
-        elif format_type == "flat":
-            files = build_flat_list(root_path=root_path, exclude_patterns=exclude_patterns)
-            for rel_path, checksum in sorted(files):
-                manifest.write(f"{rel_path}, {checksum}\n")
-        else:
-            raise ValueError(f"Unknown format: {format_type}")
-        
+    elif format_type == "yaml":
+        write_manifest_yaml(root_dir=root_dir, 
+                            manifest_path=manifest_path, 
+                            exclude_patterns=exclude_patterns)
+    elif format_type == "flat":
+        files = build_flat_list(root_path=root_path, exclude_patterns=exclude_patterns)
+        for rel_path, checksum in sorted(files):
+            manifest.write(f"{rel_path}, {checksum}\n")
+    else:
+        raise ValueError(f"Unknown format: {format_type}")
+    
         
 def build_tree(root_path):
     tree = defaultdict(list)
@@ -118,7 +121,8 @@ def write_manifest_yaml(root_dir, manifest_path, exclude_patterns=None):
         "files": build_file_list(root_path, exclude_patterns)
     }
 
-    with open(manifest_path, "w", encoding="utf-8") as f:
+    #with open(manifest_path, "w", encoding="utf-8") as f:
+    with safe_open_for_writing(to_path = manifest_path) as f:
         yaml.dump(manifest_data, f, sort_keys=False, allow_unicode=True)
 
 

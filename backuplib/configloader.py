@@ -20,6 +20,12 @@ class EncryptionJob:
     statefile_name : str
 
 @dataclass
+class ManifestJob:
+    upstream_statepath: Path
+    dir: Path
+    statefile_name: str
+
+@dataclass
 class RsyncMirroringJob:
     upstream_statepath : Path
 
@@ -50,6 +56,7 @@ class OdinConfig:
     rsync_exclusions_file : Path
     rsync_mirroring_file : str
     rsync_mirroring_job : RsyncMirroringJob
+    manifest_job : ManifestJob
 
 
 def load_config() -> OdinConfig:
@@ -95,7 +102,11 @@ def load_config() -> OdinConfig:
                     rsync_mirroring_file= config["RSYNC_MIRRORING_FILE"],
                     rsync_mirroring_job = RsyncMirroringJob(
                         upstream_statepath=Path(config["RSYNC_MIRRORING_JOB"]["UPSTREAM_STATEPATH"])
-                    )
+                    ),
+                    manifest_job = ManifestJob(upstream_statepath=Path(config["MANIFEST_JOB"]["upstream_statepath"]),
+                                                dir=Path(config["MANIFEST_JOB"]["dir"]),
+                                                statefile_name=config["MANIFEST_JOB"]["statefile_name"]
+                                               )
                 )
         return odinConfig
     except KeyError as e:

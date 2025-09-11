@@ -18,20 +18,20 @@ class SafeBuildNotCompleted(Exception):
 
 
 @contextmanager
-def _build_safe_binary(at: Path):
+def _build_safe(at: Path, in_binary = False):
+    mode = 'wb+' if in_binary else 'w+'
+
     desired_out_location = at
     desired_out_location.parent.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.TemporaryDirectory(dir=at.parent) as tmpdir:
             name = at.name
-            print(f"name: {name}")
             out_path = Path(os.path.join(tmpdir, name))
             out_path_parent = out_path.parent
             if not out_path_parent.exists():
                 print(f"the out path {out_path_parent} does not exist")
 
-            print(f"out_path : {out_path}")
-            with open(out_path, mode = 'wb+') as f:
+            with open(out_path, mode = mode) as f:
                 yield f
                 # ensure all bytes are on disk before replace
                 f.flush()
@@ -72,7 +72,7 @@ def make_a_tarball(of_dir: Path, at : Path, excluding : List[str]):
     
     tarball_path = at
     input_path = of_dir
-    with _build_safe_binary(at=tarball_path) as f:
+    with _build_safe(at=tarball_path, in_binary=True) as f:
         _create_tarball(
                         fileobj = f,
                         input_path = input_path, 
@@ -81,6 +81,26 @@ def make_a_tarball(of_dir: Path, at : Path, excluding : List[str]):
                         )
         
 
+@contextmanager
+def safe_open_for_writing(to_path: Path):
+    path = to_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", delete=False, dir=path.parent,
+            prefix=path.name + ".", suffix=".part", encoding="utf-8"
+        ) as tmp:
+            yield tmp
+            tmp.flush()
+            os.fsync(tmp.fileno())  # durability before publish
+            tmp_path = Path(tmp.name)
+        os.replace(tmp_path, path)  # atomic publish => tmp name disappears
+    except Exception:
+        if tmp_path is not None:
+            try: os.unlink(tmp_path)   # cleanup only on failure
+            except OSError: pass
+        raise
 
 def write_text_atomic(at: Path, the_text: str):
     path = at
@@ -104,5 +124,5 @@ def write_text_atomic(at: Path, the_text: str):
 
 def is_path_matches_amy_pattern(path: str, patterns: list[str]) -> bool:
     """Match POSIX-style relative path against glob patterns (supports **)."""
-    return _path_matches_any(path: str, patterns: list[str])
+    return _path_matches_any(rel=path, patterns=patterns)
 

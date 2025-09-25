@@ -38,7 +38,7 @@ def run(parent_id : str | None = None):
     run_id = "odin-manifest-" + str(uuid.uuid4())
     logger: Logger = setup_logging(level="INFO", appName="odin_generate_manifest") 
     logger = WithContext(logger, {"run_id": run_id})
-    do_anyway = True
+    do_anyway = False
     try:
         if parent_id is not None:
             logger = WithContext(logger, {"parent_id": parent_id})

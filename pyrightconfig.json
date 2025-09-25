@@ -1,0 +1,9 @@
+{
+  "typeCheckingMode": "strict",
+  "reportMissingTypeStubs": "warning",
+  "reportUnusedCallResult": "warning",
+  "reportUnknownParameterType": "error",
+  "reportUnknownArgumentType": "error",
+  "include": ["src", "tests"],
+  "exclude": ["**/__pycache__"]
+}

@@ -3,7 +3,7 @@ from pathlib import Path
 from backuplib.exceptions import ConfigException
 import yaml
 
-CONFIG_PATH = Path("~/.config/odin/odin_config.yaml").expanduser()
+CONFIG_PATH = Path("~/.config/odin-backup-system/config.yaml").expanduser()
 
 @dataclass
 class QuickManifestConfig:

@@ -42,12 +42,16 @@ def quick_scan_signature(root: Path, exclude: List) -> QuickManifestSig:
     for dirpath, dirnames, filenames in os.walk(root):
         rel_root = Path(dirpath).relative_to(root)
         # prune excluded dirs (in-place)
-        dirnames[:] = [d for d in dirnames if not is_excluded(rel_root / d, exclude)]
+        new_dirnames = [d for d in dirnames if not is_excluded(rel_root / d, exclude)]
+        dirnames.clear()
+        dirnames.extend(new_dirnames)
         for fn in filenames:
             rel = rel_root / fn
             if is_excluded(rel, exclude):
                 continue
-            p = Path(dirpath) / fn
+            p: Path  = Path(dirpath) / fn
+            if not p.exists():
+                continue
             st = p.stat()
             file_count += 1
             total_bytes += st.st_size

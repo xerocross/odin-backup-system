@@ -180,10 +180,15 @@ def run(parent_id : str | None = None):
         current_signature =  generate_signature(souce_list=souce_list, exclude_patterns=exclusions)
         logger.info(f"current signature: {current_signature}")
         
-        apply_rsync_to_list(mirrorlist)
-        logger.info("completed rsync jobs")
-        tracker.finish_run(run_id, "success")
-        return {"success": True}
+        result, msg = apply_rsync_to_list(mirrorlist)
+        if result:
+            logger.info("completed rsync jobs")
+            tracker.finish_run(run_id, "success")
+            return {"success": True}
+        else:
+            logger.error(msg)
+            tracker.finish_run(run_id, "failed")
+            return {"success": False}
     except Exception as e:
         if logger:
             logger.exception("rsync mirror job failed")

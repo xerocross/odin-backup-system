@@ -58,12 +58,13 @@ def run(parent_id : str | None = None):
                 for line in f.readlines():
                     dir = line.strip()
                     mirroring_list.append(dir)
+            logger.info(f"rsync list: {' '.join(mirroring_list)}")
             return mirroring_list
 
         def get_source_destination_list() -> List[MirrorListItem]:
             rsync_mirroring_file = odin_cfg.repo_dir / odin_cfg.rsync_mirroring_file
             config_targets : List[str] = read_rsync_mirroring_file(rsync_mirroring_file)
-            source_destination_list :List[MirrorListItem] = []
+            source_destination_list : List[MirrorListItem] = []
             source_root = Path(odin_cfg.sidecar_root)
             dest_root = Path(odin_cfg.repo_dir)
             for t in config_targets:
@@ -85,11 +86,14 @@ def run(parent_id : str | None = None):
                             logger.error(f"error: rsync preflight failed on {item.origin}: {msg}")
                             continue
                         rsync(item.origin, item.target, exclude_file = exclude_file)
-                        return (True, "ok")
-                    except:
+                    except Exception:
+                        logger.exception(f"could not mirror {str(item.origin)}")
                         rsync_mirror_errors.append(str(item.origin))
-                        return (False, ", ".join(rsync_mirror_errors))
-                return (True, "ok")
+
+                if rsync_mirror_errors:
+                    return (False, "could not sync: " + ", ".join(rsync_mirror_errors))
+                else:
+                    return (True, f"mirrored all {len(source_destination_list)} items")
             
                     
         def check_rsync_path(remote: str, timeout: int = 10) -> bool:
@@ -182,7 +186,7 @@ def run(parent_id : str | None = None):
         
         result, msg = apply_rsync_to_list(mirrorlist)
         if result:
-            logger.info("completed rsync jobs")
+            logger.info(f"completed rsync jobs: {msg}")
             tracker.finish_run(run_id, "success")
             return {"success": True}
         else:

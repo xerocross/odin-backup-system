@@ -23,9 +23,7 @@ odin_config : OdinConfig = load_config()
 utc_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
 run_id = "odin-quick-manifest-"+str(uuid.uuid4())
 logger = setup_logging(appName = "quick_manifest_job")
-logger = WithContext(logger, {"run_id": run_id})
-
-
+logger = WithContext(logger, {"run_id": run_id, "app_name": "quick_manifest_job"})
 
 
 @audited_by(tracker, with_step_name="write state", and_run_id = run_id)

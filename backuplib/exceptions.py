@@ -8,3 +8,6 @@ class ConfigException(Exception):
 class RsyncMirroringException(Exception):
     """Failed to rsync one of the configured items"""
     pass
+
+class LoggerSetupFailureException(Exception):
+    """Error occurred and logger was not set up"""

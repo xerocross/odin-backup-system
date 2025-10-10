@@ -25,11 +25,14 @@ class QuickManifestScan:
     latest_mtime_ns : int
     total_bytes: int
 
-def is_excluded(path: Path, exclude_patterns: Iterable[str]):
+def is_excluded(path: Path, exclude_patterns: Iterable[str] | None) -> bool:
     path_string = path.as_posix()
-    return any(fnmatch.fnmatch(path_string, pattern) for pattern in exclude_patterns)
+    if not exclude_patterns:
+        return False
+    else:
+        return any(fnmatch.fnmatch(path_string, pattern) for pattern in exclude_patterns)
 
-def quick_scan_signature(root: Path, exclude: List) -> QuickManifestSig:
+def quick_scan_signature(root: Path, exclude: List[str]) -> QuickManifestSig:
     """
     Cheap signal for 'did anything relevant change?':
       - latest mtime (ns) of any included file
@@ -66,10 +69,7 @@ def quick_scan_signature(root: Path, exclude: List) -> QuickManifestSig:
     )
 
 
-
-
-
-def hash_quick_manifest_scan(quick_scan : QuickManifestScan):
+def hash_quick_manifest_scan(quick_scan : QuickManifestSig):
     digest = f"{sha256_string(str(quick_scan.file_count))}\
         {sha256_string(str(quick_scan.latest_mtime_ns))}\
             {sha256_string(str(quick_scan.total_bytes))}"

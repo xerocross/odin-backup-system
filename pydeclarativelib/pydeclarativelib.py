@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import os
 import tarfile
-from typing import List
+from typing import List, Any, Iterator, Optional, Type, Callable
 from fnmatch import fnmatch
 from contextlib import contextmanager
 
@@ -15,6 +15,25 @@ class InputTypeException(Exception):
 class SafeBuildNotCompleted(Exception):
     """A safe-build procedure failed"""
     pass
+
+from contextlib import contextmanager
+
+class EndOfStream(Exception):
+    """Semantic boundary: normal end of data (not an error)."""
+    pass  # semantic, not error
+
+
+class IterConsumable():
+    def __init__(self, itr : Iterator[Any]) -> None:
+        self.itr = itr
+
+    def for_each(self, callback : Callable[[Any], None]):
+        try:
+            while(True):
+                next_value = next(self.itr)
+                callback(next_value)
+        except StopIteration:
+            pass
 
 
 @contextmanager

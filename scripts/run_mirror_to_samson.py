@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 import subprocess
 from typing import Tuple
 from pathlib import Path
-from backuplib.logging import setup_logging, WithContext, Logger
+from backuplib.logging import setup_logging, WithContext
 from backuplib.configloader import OdinConfig, load_config
 from backuplib.audit import Tracker
-from backuplib.filesutil import quick_scan_signature, QuickManifestScan, \
+from backuplib.filesutil import quick_scan_signature, \
       hash_quick_manifest_scan, file_to_lines_list
 from backuplib.checksumtools import sha256_string
 from backuplib.exceptions import RsyncMirroringException
 from typing import List, Tuple
 import datetime
 import uuid
-import traceback
 from dataclasses import dataclass
 
 @dataclass
@@ -22,18 +22,17 @@ class MirrorListItem:
 
 
 def run(parent_id : str | None = None):
-    logger : Logger | None = None
+    logger = setup_logging(appName="rsync_mirroring")
     tracker : Tracker | None = None
     run_id = "odin-rsync-mirror-"+str(uuid.uuid4())
     try:
         odin_cfg: OdinConfig = load_config()
-        logger = setup_logging(appName="rsync_mirroring")
-        WithContext(logger, {"run_id": run_id})
+        assert logger is not None
+        logger = WithContext(logger, {"run_id": run_id}) # type: ignore
         if parent_id is not None:
-            WithContext(logger, {"parent_id": parent_id})
+            logger = WithContext(logger, {"parent_id": parent_id})# type: ignore
         utc_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         tracker = Tracker()
-        trace : List[str] = []
 
         def preflight_check(mirrorListItem: MirrorListItem) -> Tuple[bool, str]:
             checks_out = check_rsync_path(remote=mirrorListItem.origin.as_posix())
@@ -42,10 +41,10 @@ def run(parent_id : str | None = None):
             return True, "ok"
 
         def generate_signature(souce_list : List[str], exclude_patterns: List[str]):
-            hashes = []
+            hashes : List[str] = []
             souce_list.sort()
             for item in souce_list:
-                qsig = quick_scan_signature(root=item, exclude = exclude_patterns)
+                qsig = quick_scan_signature(root=Path(item), exclude = exclude_patterns)
                 hashes.append(hash_quick_manifest_scan(quick_scan=qsig))
             hashes_string = "".join(hashes)
             signature = sha256_string(hashes_string)
@@ -132,7 +131,7 @@ def run(parent_id : str | None = None):
                 logger.error(f"Preflight timeout on {remote}")
                 return False
 
-        def rsync( source, target, exclude_file = None):
+        def rsync( source : Path, target : Path, exclude_file : Path | None = None):
             logger.info(f"attempting to rsync from {str(source)} to {str(target)}")
             cmd = ["rsync","-aHAX","--delete","--human-readable", "--out-format=%t %i %n%L", "--itemize-changes" ,"--info=STATS2"]
 

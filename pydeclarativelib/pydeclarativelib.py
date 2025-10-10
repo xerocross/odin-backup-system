@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import os
 import tarfile
-from typing import List, Any, Iterator, Optional, Type, Callable
+from typing import List, Any, Iterator, Callable, BinaryIO
 from fnmatch import fnmatch
 from contextlib import contextmanager
 
@@ -15,8 +15,6 @@ class InputTypeException(Exception):
 class SafeBuildNotCompleted(Exception):
     """A safe-build procedure failed"""
     pass
-
-from contextlib import contextmanager
 
 class EndOfStream(Exception):
     """Semantic boundary: normal end of data (not an error)."""
@@ -37,7 +35,7 @@ class IterConsumable():
 
 
 @contextmanager
-def _build_safe(at: Path, in_binary = False):
+def _build_safe(at: Path, in_binary: bool = False):
     mode = 'wb+' if in_binary else 'w+'
 
     desired_out_location = at
@@ -65,7 +63,7 @@ def _path_matches_any(rel: str, patterns: list[str]) -> bool:
     return any(fnmatch(rel, pat) for pat in patterns)
 
 def _create_tarball(
-                    fileobj,
+                    fileobj : BinaryIO | None,
                     input_path: Path, 
                     exclude_patterns: List[str],
                     gz: bool = True
@@ -75,7 +73,7 @@ def _create_tarball(
     Excludes are matched against POSIX-style relative paths.
     """
     mode = 'w:gz' if gz else 'w'
-    with tarfile.open(name=None, mode = mode, fileobj=fileobj) as tar:
+    with tarfile.open(name = None, mode = mode, fileobj = fileobj) as tar:
         for p in input_path.rglob("*"):
             if not p.is_file():
                 continue  # avoid redundant recursion
@@ -86,12 +84,11 @@ def _create_tarball(
 
 
 def make_a_tarball(of_dir: Path, at : Path, excluding : List[str]):
-    if not isinstance(of_dir, Path):
-        raise InputTypeException("of_dir must be a Path")
-    
+    target_dir = of_dir
     tarball_path = at
-    input_path = of_dir
+    input_path = target_dir
     with _build_safe(at=tarball_path, in_binary=True) as f:
+        assert isinstance(f, BinaryIO)
         _create_tarball(
                         fileobj = f,
                         input_path = input_path, 

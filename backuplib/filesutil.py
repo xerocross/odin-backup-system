@@ -1,10 +1,11 @@
+from __future__ import annotations
 import fnmatch
 from pathlib import Path
-from typing import Iterable, Callable
+from typing import Iterable
 import json, hashlib
 import os, tempfile
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import List, Any
 from backuplib.checksumtools import sha256_string
 
 
@@ -81,7 +82,7 @@ def file_to_lines_list(from_file: Path):
     return lines
 
 
-def digest(obj) -> str:
+def digest(obj: Any) -> str:
     data = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(data).hexdigest()
 

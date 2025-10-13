@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import os
 import tarfile
-from typing import List, Any, Iterator, Callable, BinaryIO
+from typing import List, Any, Iterator, Callable, IO
 from fnmatch import fnmatch
 from contextlib import contextmanager
 
@@ -63,7 +63,7 @@ def _path_matches_any(rel: str, patterns: list[str]) -> bool:
     return any(fnmatch(rel, pat) for pat in patterns)
 
 def _create_tarball(
-                    fileobj : BinaryIO | None,
+                    fileobj : IO[Any] | None,
                     input_path: Path, 
                     exclude_patterns: List[str],
                     gz: bool = True
@@ -88,7 +88,6 @@ def make_a_tarball(of_dir: Path, at : Path, excluding : List[str]):
     tarball_path = at
     input_path = target_dir
     with _build_safe(at=tarball_path, in_binary=True) as f:
-        assert isinstance(f, BinaryIO)
         _create_tarball(
                         fileobj = f,
                         input_path = input_path, 
@@ -96,7 +95,6 @@ def make_a_tarball(of_dir: Path, at : Path, excluding : List[str]):
                         gz = True
                         )
         
-
 @contextmanager
 def safe_open_for_writing(to_path: Path):
     path = to_path

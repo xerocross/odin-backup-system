@@ -3,13 +3,13 @@
 import hashlib, tempfile
 from pathlib import Path
 import os, json
-from typing import Tuple
+from typing import Tuple, Any
 
 class InvalidJSONException(Exception):
     '''Exception: attempted to canonicalize invalid json'''
 
 # Helpers
-def canonicalize_json(text):
+def canonicalize_json(text: str | None) -> str | None:
     if text is None:
         return None
     try:
@@ -20,7 +20,7 @@ def canonicalize_json(text):
     # Canonical dump for stable hashing (order/whitespace independent)
     return json.dumps(obj, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
 
-def sha256_hex(s):
+def sha256_hex(s : str):
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
@@ -44,7 +44,7 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
 def hash_script(script_path: Path) -> str:
     return sha256_file(script_path)
 
-def digest(obj) -> str:
+def digest(obj : Any) -> str:
     data = json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(data).hexdigest()
 

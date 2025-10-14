@@ -1,16 +1,15 @@
 
 from backuplib.configloader import OdinConfig, load_config
-from backuplib.filesutil import QuickManifestScan, quick_scan_signature,\
+from backuplib.filesutil import QuickManifestSig, quick_scan_signature,\
       hash_quick_manifest_scan, atomic_write_text
 from backuplib.jobstatehelper import get_hash
-from backuplib.logging import setup_logging, Logger, WithContext
+from backuplib.logging import setup_logging, WithContext
 from backuplib.checksumtools import sha256_string
 from backuplib.audit import Tracker
 from pydeclarativelib.declarativeaudit import audited_by
-from pydeclarativelib.declarativesuccess import with_try_except_and_trace
 from backuplib.backupjob import BackupJobResult
-from typing import Tuple
-from dataclasses import asdict
+from typing import TypedDict, List
+from localtypes.projecttypes import JobStageInfo
 from pathlib import Path
 import datetime
 import json
@@ -25,14 +24,19 @@ run_id = "odin-quick-manifest-"+str(uuid.uuid4())
 logger = setup_logging(appName = "quick_manifest_job")
 logger = WithContext(logger, {"run_id": run_id, "app_name": "quick_manifest_job"})
 
+class QSigDict(TypedDict):
+    root: str
+    exclude : List[str]
+    file_count : int
+    latest_mtime_ns: int
+    total_bytes : int
 
 @audited_by(tracker, with_step_name="write state", and_run_id = run_id)
-@with_try_except_and_trace(if_success_then_message="wrote state", if_failed_then_message="could not write state", with_trace=trace)
 def write_state(
                 statefile_path : Path,
                 quick_manifest_scan_hash : str,
                 upstream_hash : str
-            ):
+            )-> JobStageInfo:
     statefile_name = odin_config.quick_manifest_config.statefile_name
     statefile_dir = odin_config.quick_manifest_config.dir
     statefile_path = statefile_dir / statefile_name
@@ -48,15 +52,12 @@ def write_state(
     logger.info(f"generated Odin quick manifest state file at {statefile_path}")
     return {
         "success": True,
-        "message": ""
     }
 
 @audited_by(tracker, with_step_name="write quickmanifest", and_run_id = run_id)
-@with_try_except_and_trace(if_success_then_message="wrote quickmanifest", 
-                           if_failed_then_message="could not write quickmanifest", with_trace=trace)
-def write_quickmanifest(quickmanifestscan: QuickManifestScan):
+def write_quickmanifest(quickmanifestscan: QuickManifestSig) -> JobStageInfo:
     
-    qsigdict = {
+    qsigdict: QSigDict = {
             "root": str(quickmanifestscan.root),
             "exclude": quickmanifestscan.exclude,
             "file_count": quickmanifestscan.file_count,
@@ -68,10 +69,9 @@ def write_quickmanifest(quickmanifestscan: QuickManifestScan):
     logger.info(f"generated Odin quick manifest data file at {outpath}")
     return {
         "success": True,
-        "message": ""
     }
 
-def run(parent_id = None):
+def run(parent_id : str | None = None) -> JobStageInfo:
     try:
         tracker.start_run(run_id=run_id,
                 run_name="odin_quick_manifest",
@@ -96,7 +96,10 @@ def run(parent_id = None):
                 logger.info(f"{BackupJobResult.SKIPPED}")
                 tracker.finish_run(run_id, "skipped")
                 return {"success" : True}
-        qscan: QuickManifestScan = quick_scan_signature(root = repo_dir, exclude = odin_config.manifest_exclusions)
+        qscan: QuickManifestSig = quick_scan_signature(
+                                                    root = repo_dir, 
+                                                    exclude = odin_config.manifest_exclusions
+                                                    )
         hash = sha256_string(f"{hash_quick_manifest_scan(quick_scan = qscan)}:{upstream_job_hash}") 
         write_state(statefile_path=statefile_path, quick_manifest_scan_hash = hash, upstream_hash=upstream_job_hash)
         write_quickmanifest(qscan)

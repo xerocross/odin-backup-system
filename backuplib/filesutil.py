@@ -7,6 +7,7 @@ import os, tempfile
 from dataclasses import dataclass
 from typing import List, Any
 from backuplib.checksumtools import sha256_string
+import errno
 
 
 @dataclass
@@ -104,3 +105,38 @@ def atomic_write_text(path: Path, text: str):
             try: os.unlink(tmp_path)   # cleanup only on failure
             except OSError: pass
         raise
+
+
+def preflight_check_write(target_path: Path) -> None:
+    """
+    Perform a preflight check to ensure the given path is writable
+    and that no existing file or directory will be overwritten.
+
+    Raises:
+        FileExistsError: If the target already exists.
+        PermissionError: If the directory is not writable.
+        FileNotFoundError: If the parent directory does not exist.
+        OSError: For other OS-level issues.
+    """
+    target_path = Path(target_path)
+
+    # Check parent directory
+    parent = target_path.parent
+    if not parent.exists():
+        raise FileNotFoundError(errno.ENOENT, f"Parent directory does not exist: {parent}")
+    if not parent.is_dir():
+        raise NotADirectoryError(errno.ENOTDIR, f"Parent path is not a directory: {parent}")
+
+    # Check for existing file or dir
+    if target_path.exists():
+        raise FileExistsError(errno.EEXIST, f"Target already exists: {target_path}")
+
+    # Check writability by attempting to open a test file descriptor
+    try:
+        with open(parent / ".__write_test__", "w") as f:
+            pass
+        os.remove(parent / ".__write_test__")
+    except PermissionError:
+        raise PermissionError(errno.EACCES, f"Directory is not writable: {parent}")
+    except OSError as e:
+        raise OSError(e.errno, f"Unexpected OS error while checking writability: {e.strerror}")

@@ -20,20 +20,18 @@ Possible result codes (printed when --porcelain or --json is used):
 Exit codes:
   0 on success, non-zero on failure. On failure, stderr explains why.
 """
-import argparse
-import json
-import os
+
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
-from backuplib.audit import Tracker, StepRef
+from typing import Optional, Tuple, Dict, List
+from backuplib.audit import Tracker
 from dataclasses import dataclass
 from backuplib.logging import setup_logging, WithContext
-import uuid
 
 global_log = setup_logging(level="INFO", appName="git_pull_module")
+
 
 @dataclass
 class QuickGitRepoSig:
@@ -60,7 +58,7 @@ class GitPullFailure(GitException):
     """Error: An error occurred during git pull"""
     pass
 
-def generate_qsig(repo_path) -> QuickGitRepoSig:
+def generate_qsig(repo_path: Path) -> QuickGitRepoSig:
     head_hash = get_git_headhash(repo_path)
     qsig = QuickGitRepoSig(
                 repo_path = str(repo_path),
@@ -90,7 +88,7 @@ def ensure_repo(path: Path) -> None:
         sys.stderr.write(f"Error: {path} is not a Git repo (rev-parse failed): {e.stderr}\n")
         raise PathNotAGitRepo
 
-def run(cmd, timeout: Optional[int] = None, cwd: Optional[Path] = None) -> Tuple[int, str, str]:
+def run(cmd : List[str], timeout: Optional[int] = None, cwd: Optional[Path] = None) -> Tuple[int, str, str]:
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -112,7 +110,7 @@ def detect_target_ref(repo: Path, remote: str, branch: Optional[str]) -> Tuple[O
     if branch:
         return f"{remote}/{branch}", None
     # Try upstream of current branch
-    rc, upstream_ref, err = run(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    rc, upstream_ref, err = run(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]) # type: ignore
     if rc != 0:
         return None, "no_upstream"
     return upstream_ref.strip(), None
@@ -120,7 +118,7 @@ def detect_target_ref(repo: Path, remote: str, branch: Optional[str]) -> Tuple[O
 def get_git_headhash(
         repo_path: Path
     ):
-    rc, stdout, stderr = run(["git", "-C", repo_path, "rev-parse", "HEAD"])
+    rc, stdout, stderr = run(["git", "-C", repo_path.as_posix(), "rev-parse", "HEAD"]) # pyright: ignore[reportUnusedVariable]
     if (rc != 0):
         raise GitException
     return stdout.strip()
@@ -135,7 +133,7 @@ def git_pull(
     *,
     tracker: Tracker,
     run_id: str
-) -> Tuple[int, str, str, dict]:
+) -> Tuple[int, str, str, Dict[str, str | None]]:
     """
     Perform `git pull` in the given repo.
     Returns (returncode, stdout, stderr, summary_dict).
@@ -143,9 +141,8 @@ def git_pull(
 
 
     log = WithContext(global_log, {"run_log_id": run_id})
-
     log.debug("starting git pull operation")
-    summary = {"result": None, "before": None, "after": None, "target": None, "remote": remote, "branch": branch}
+    summary : Dict[str, str | None]  = {"result": None, "before": None, "after": None, "target": None, "remote": remote, "branch": branch}
     
     with tracker.record_step(run_id =run_id, 
                              name = "ensure git repo"
@@ -156,7 +153,7 @@ def git_pull(
 
 
     # Identify target ref for comparison
-    target_ref, errcode = detect_target_ref(repo_path, remote, branch)
+    target_ref, errcode = detect_target_ref(repo_path, remote, branch) # pyright: ignore[reportUnusedVariable]
     if not target_ref:
         message = "No upstream set for current branch and no --branch provided.\n"
         log.error(message)
@@ -177,7 +174,7 @@ def git_pull(
     with tracker.record_step(run_id, "perform fetch") as rec:
         # Fetch first
         fetch_cmd = ["git", "-C", str(repo_path), "fetch", remote]
-        frc, fout, ferr = run(fetch_cmd, timeout=timeout)
+        frc, fout, ferr = run(fetch_cmd, timeout=timeout) # pyright: ignore[reportUnusedVariable]
         if frc != 0:
             rec["status"] = "failed"
             raise FetchFailed
@@ -210,6 +207,7 @@ def git_pull(
 
     with tracker.record_step(run_id, "perform git pull operation") as rec:
         # Build pull cmd
+        rec["message"] = ""
         pull_cmd = ["git", "-C", str(repo_path), "pull", remote]
         if branch:
             rec["message"] = "branch"
@@ -269,45 +267,5 @@ def git_pull(
 
     return 0, pout, perr, summary
 
-def parse_args(argv=None):
-    p = argparse.ArgumentParser(description="Run `git pull` safely from Python, with machine-readable outcomes.")
-    p.add_argument("--repo", required=True, help="Path to the Git repository (use '.' for current directory).")
-    p.add_argument("--remote", default="origin", help="Remote name (default: origin).")
-    p.add_argument("--branch", default=None, help="Branch to pull (default: the current branch's upstream).")
-    p.add_argument("--rebase", action="store_true", help="Use --rebase instead of merge.")
-    p.add_argument("--ff-only", dest="ff_only", action="store_true", help="Require fast-forward (no merge commits).")
-    p.add_argument("--timeout", type=int, default=300, help="Timeout in seconds for fetch/pull (default: 300).")
-    p.add_argument("--porcelain", action="store_true", help="Print a single machine-readable result code.")
-    p.add_argument("--json", dest="as_json", action="store_true", help="Print a JSON summary.")
-    return p.parse_args(argv)
-
-def main(argv=None) -> int:
-    args = parse_args(argv)
-
-    repo_path = Path(args.repo).resolve()
-    rc, out, err, summary = git_pull(
-        repo_path=repo_path,
-        remote=args.remote,
-        branch=args.branch,
-        rebase=args.rebase,
-        ff_only=args.ff_only,
-        timeout=args.timeout,
-        want_machine=args.porcelain or args.as_json,
-        want_json=args.as_json,
-    )
-    # Stream outputs as usual
-    if out:
-        sys.stdout.write(out)
-    if err:
-        sys.stderr.write(err)
-
-    # Machine-readable outputs last
-    if args.as_json:
-        sys.stdout.write(json.dumps(summary) + "\n")
-    elif args.porcelain and summary.get("result"):
-        sys.stdout.write(f"{summary['result']}\n")
-
-    return rc
-
 if __name__ == "__main__":
-    sys.exit(main())
+    pass

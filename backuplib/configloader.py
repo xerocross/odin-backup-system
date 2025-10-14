@@ -14,6 +14,12 @@ class QuickManifestConfig:
     outfile : Path
 
 @dataclass
+class ResticSnapshotJob:
+    restic_repo_path: Path
+    restic_excludes_file_path: Path
+    restic_password_file_path: Path
+
+@dataclass
 class EncryptionJob:
     upstream_statepath : Path
     dir : Path
@@ -57,6 +63,7 @@ class OdinConfig:
     rsync_mirroring_file : str
     rsync_mirroring_job : RsyncMirroringJob
     manifest_job : ManifestJob
+    restic_snapshot_job : ResticSnapshotJob
 
 
 def load_config() -> OdinConfig:
@@ -86,7 +93,7 @@ def load_config() -> OdinConfig:
                     encrypted_tarball_name=config["ENCRYPTED_TARBALL_NAME"],
                     quick_manifest_config = QuickManifestConfig(
                         dir = Path(config["QUICK_MANIFEST_SCAN"]["dir"]),
-                        statefile_name = Path(config["QUICK_MANIFEST_SCAN"]["statefile_name"]),
+                        statefile_name = config["QUICK_MANIFEST_SCAN"]["statefile_name"],
                         upstream_statepath = Path(config["QUICK_MANIFEST_SCAN"]["upstream_statepath"]),
                         outfile = Path(config["QUICK_MANIFEST_SCAN"]["outfile"]),
                         manifest_exclusions = config["MANIFEST_EXCLUSIONS"]
@@ -94,7 +101,7 @@ def load_config() -> OdinConfig:
                     encryption_job = EncryptionJob(
                         upstream_statepath = Path(config["ENCRYPTION_JOB"]["upstream_statepath"]),
                         dir = Path(config["ENCRYPTION_JOB"]["dir"]),
-                        statefile_name = Path(config["ENCRYPTION_JOB"]["statefile_name"])
+                        statefile_name = config["ENCRYPTION_JOB"]["statefile_name"]
                     ),
                     rsync_mirroring=config["RSYNC_MIRRORING"],
                     sidecar_root=config["SIDECAR_ROOT"],
@@ -106,7 +113,12 @@ def load_config() -> OdinConfig:
                     manifest_job = ManifestJob(upstream_statepath=Path(config["MANIFEST_JOB"]["upstream_statepath"]),
                                                 dir=Path(config["MANIFEST_JOB"]["dir"]),
                                                 statefile_name=config["MANIFEST_JOB"]["statefile_name"]
-                                               )
+                                               ),
+                    restic_snapshot_job = ResticSnapshotJob(
+                                                        restic_password_file_path = Path(config["RESTIC_SNAPSHOT_JOB"]["restic_password_file_path"]),
+                                                        restic_excludes_file_path = Path(config["RESTIC_SNAPSHOT_JOB"]["restic_excludes_file_path"]),
+                                                        restic_repo_path = Path(config["RESTIC_SNAPSHOT_JOB"]["restic_repo_path"])
+                                                        )
                 )
         return odinConfig
     except KeyError as e:

@@ -23,7 +23,7 @@ def run():
     run_id = "odin-full-backup-"+str(uuid.uuid4())
     odin_cfg: OdinConfig = load_config()
     logger : Logger = setup_logging(appName = "odin-full-backup")
-    logger = WithContext(logger, {"run_id": run_id})
+    logger = WithContext(logger, {"run_id": run_id}) # type: ignore
     utc_timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
     tz = ZoneInfo(odin_cfg.local_zone)
     trace : List[str] = [f"run_id:{run_id}"]

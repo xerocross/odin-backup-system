@@ -173,9 +173,9 @@ class Tracker:
     ):
         step = self.start_step(run_id, name)
         try:
-            yielded : AuditStageRecord = { "success" : "", "message" : None}
+            yielded : AuditStageRecord = { "status" : "", "message" : None}
             yield yielded 
-            status = yielded.get("status", "success")
+            status = yielded.get("status", "failed")
             message = yielded.get("message", "")
             self.finish_step(step, status, message=message)
         except Exception as e:

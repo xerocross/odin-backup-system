@@ -8,5 +8,5 @@ class JobStageInfo(TypedDict):
     data : Dict[str, Any] | None
 
 class AuditStageRecord(TypedDict):
-    success : str
+    status : str
     message : str | None
